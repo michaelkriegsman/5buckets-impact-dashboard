@@ -1,5 +1,24 @@
 # 5 Buckets Impact Dashboard
 
+> ## ✅ ACTIVE SOURCE OF TRUTH — since June 15, 2026
+>
+> **This standalone repo is the live codebase for the hosted dashboard.**
+> Set up on **2026-06-15**. It supersedes the older copy that lived in Google Drive at
+> `…/5 Buckets/Impact Suite/Impact Dashboard/` (that copy is now deprecated for editing).
+>
+> - **Git remote:** `github.com/5buckets/5buckets-impact-dashboard` (client's GitHub, public repo)
+> - **Live host:** Posit Connect Cloud (client's free account) — auto-redeploys on every `git push`
+> - **Edit loop:** edit here → `git add -A && git commit -m "…" && git push` → Connect Cloud rebuilds → live URL updates
+>
+> **Hosting / auth notes**
+> - Auth to Google Sheets uses a **service account**; the JSON key is set on Connect Cloud as the
+>   secret env var `GOOGLE_SERVICE_ACCOUNT_KEY` (never committed).
+> - A login wall turns on only when `DASHBOARD_AUTH_PASSWORD` is set (it is, on the host). Local dev
+>   stays password-free because that var is unset locally. See top of `app.R`.
+> - The respondent-ID **salt is NOT in this repo** — it lives only in the Google Apps Script files,
+>   so a public repo is safe.
+> - First Connect Cloud build installs ~124 R packages and can take 10–20 min (one time).
+
 Shiny web application for analyzing 5 Buckets workshop survey data.
 
 ## Quick Start
@@ -55,26 +74,21 @@ Rscript run_app.R
 
 **Naming:** current app is `app.R`; retired Jan 2026 shell is `app_2026-01.R`. Archive notes: `FEB2026_DASHBOARD_README_2026-02.md`.
 
-**Client production deploy:** `DEPLOY_CLIENT_POSIT.md` (shinyapps.io Standard + service account + optional custom domain).
+### 5. Deploy to Posit Connect Cloud (current method)
 
-### 5. Deploy to shinyapps.io
+Deployment is **git-based** — no `rsconnect::deployApp()` needed:
 
-```r
-library(rsconnect)
-rsconnect::setAccountInfo(
-  name = "your-account-name",
-  token = "your-token",
-  secret = "your-secret"
-)
+1. Push to `github.com/5buckets/5buckets-impact-dashboard` (`main` branch).
+2. On [connect.posit.cloud](https://connect.posit.cloud) the app is linked to this repo; it rebuilds
+   automatically from `manifest.json` (primary file `app.R`).
+3. Secret/env variables are set in the Connect Cloud deployment settings (not in code):
+   - `GOOGLE_SERVICE_ACCOUNT_KEY` — full service-account JSON, one line
+   - `DASHBOARD_AUTH_PASSWORD` — turns on the in-app login wall
+   - `MASTER_PRE_SHEET_ID`, `MASTER_POST_SHEET_ID`, `PROGRAM_MANAGER_SHEET_ID` — optional overrides
+     (defaults live in `global.R`)
 
-setwd("Impact Dashboard")  # or full path to this folder
-deployApp(appName = "5buckets-impact-dashboard")
-```
-
-**Set Environment Variables in shinyapps.io dashboard:**
-- `MASTER_PRE_SHEET_ID`
-- `MASTER_POST_SHEET_ID`
-- `PROGRAM_MANAGER_SHEET_ID`
+> Note: shinyapps.io is retired (Dec 2026) and is **not** used. Ignore any older `*_DEPLOY*.md`
+> notes referring to it; they were left in the Drive copy for history only.
 
 ## Project Structure
 
