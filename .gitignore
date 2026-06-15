@@ -1,0 +1,37 @@
+# R
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+.Rproj.user/
+
+# Shiny
+.shiny_deploy/
+rsconnect/
+
+# Google Auth
+.secrets/
+*.json
+!package.json
+!manifest.json
+service-account-key.json
+google-service-account.json
+
+# Environment
+.Renviron
+.env
+
+# Deployment scripts with secrets
+deploy_setup.R
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+/tmp/
+
+# Temporary files
+*.tmp
+~$*
