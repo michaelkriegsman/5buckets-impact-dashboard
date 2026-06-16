@@ -1105,12 +1105,29 @@ sidebar_card <- function(title, ...) {
   list(text = "Significantly below the midpoint.", color = "#b54b3a")
 }
 
+# Normalize sidebar filter inputs. With shinymanager, inputs can be NA before login;
+# using them in `if (x != "All")` without this guard triggers "missing value where TRUE/FALSE needed".
+.sidebar_filter_choice <- function(x, default = "All") {
+  x <- tryCatch(x, error = function(e) NULL)
+  if (is.null(x) || length(x) == 0L) return(default)
+  if (length(x) == 1L && is.na(x)) return(default)
+  x <- trimws(as.character(x))
+  if (length(x) == 1L && !nzchar(x)) return(default)
+  x
+}
+
+# TRUE when a selectInput has a real user choice (not NULL / NA / blank).
+.has_select_value <- function(x) {
+  x <- tryCatch(x, error = function(e) NULL)
+  !is.null(x) && length(x) == 1L && !is.na(x) && nzchar(trimws(as.character(x)))
+}
+
 # Sidebar-aware scope sentence: states whether a box reflects the full population
 # or a filtered subset. `input` is the server's reactive input object.
 scope_sentence <- function(input) {
-  org  <- tryCatch(input$selected_org, error = function(e) NULL)
-  grp  <- tryCatch(input$selected_group, error = function(e) NULL)
-  lang <- tryCatch(input$filter_language, error = function(e) NULL)
+  org  <- .sidebar_filter_choice(tryCatch(input$selected_org, error = function(e) NULL))
+  grp  <- .sidebar_filter_choice(tryCatch(input$selected_group, error = function(e) NULL))
+  lang <- .sidebar_filter_choice(tryCatch(input$filter_language, error = function(e) NULL), default = "All")
   use_date <- tryCatch(isTRUE(input$use_date_filter), error = function(e) FALSE)
   dr   <- tryCatch(input$date_range, error = function(e) NULL)
   parts <- character(0)
@@ -3424,7 +3441,7 @@ server <- function(input, output, session) {
   observe({
     pre_data <- master_pre()
     post_data <- master_post()
-    sel_org <- tryCatch(input$selected_org, error = function(e) "All")
+    sel_org <- .sidebar_filter_choice(tryCatch(input$selected_org, error = function(e) NULL))
     groups <- character(0)
     group_col <- NULL
     org_col <- NULL
@@ -3511,12 +3528,10 @@ server <- function(input, output, session) {
   
   # Safe access to org/group (they live in uiOutput and may be NULL before first render)
   selected_org <- reactive({
-    out <- tryCatch(input$selected_org, error = function(e) NULL)
-    if (is.null(out) || is.na(out) || length(out) == 0) "All" else out
+    .sidebar_filter_choice(tryCatch(input$selected_org, error = function(e) NULL))
   })
   selected_group <- reactive({
-    out <- tryCatch(input$selected_group, error = function(e) NULL)
-    if (is.null(out) || is.na(out) || length(out) == 0) "All" else out
+    .sidebar_filter_choice(tryCatch(input$selected_group, error = function(e) NULL))
   })
   
   # Filtered program manager data
@@ -3898,10 +3913,8 @@ server <- function(input, output, session) {
   current_session_filters <- reactive({
     use_date <- tryCatch(isTRUE(input$use_date_filter), error = function(e) FALSE)
     dr <- tryCatch(input$date_range, error = function(e) NULL)
-    sel_org <- tryCatch(input$selected_org, error = function(e) "All")
-    sel_grp <- tryCatch(input$selected_group, error = function(e) "All")
-    if (is.null(sel_org) || length(sel_org) == 0) sel_org <- "All"
-    if (is.null(sel_grp) || length(sel_grp) == 0) sel_grp <- "All"
+    sel_org <- .sidebar_filter_choice(tryCatch(input$selected_org, error = function(e) NULL))
+    sel_grp <- .sidebar_filter_choice(tryCatch(input$selected_group, error = function(e) NULL))
     list(
       use_date = use_date,
       date_range = dr,
@@ -10276,8 +10289,8 @@ server <- function(input, output, session) {
   # Update within-session group dropdown based on selected org (from Master)
   observe({
     pre_data <- master_pre()
-    selected_org <- input$within_session_org
-    if (nrow(pre_data) > 0 && "group" %in% colnames(pre_data) && selected_org != "") {
+    selected_org <- tryCatch(input$within_session_org, error = function(e) NULL)
+    if (nrow(pre_data) > 0 && "group" %in% colnames(pre_data) && .has_select_value(selected_org)) {
       org_sessions <- pre_data %>% filter(org_name == selected_org)
       groups <- unique(org_sessions$group)
       groups <- groups[!is.na(groups) & groups != ""]
@@ -10303,19 +10316,21 @@ server <- function(input, output, session) {
   
   # Get series data for selected org/group (from Master Pre/Post)
   within_session_journey <- reactive({
-    if (input$within_session_org == "") return(NULL)
+    if (!.has_select_value(tryCatch(input$within_session_org, error = function(e) NULL))) return(NULL)
     pre_data <- master_pre()
     post_data <- master_post()
     pm_data <- tryCatch(program_manager(), error = function(e) data.frame())
     ss <- create_session_summary_from_master(pre_data, post_data, pm_data)
     if (nrow(ss) == 0) return(NULL)
-    if (input$within_session_group == "" || input$within_session_group == "__NO_GROUP__") {
+    ws_org <- input$within_session_org
+    ws_grp <- tryCatch(input$within_session_group, error = function(e) NULL)
+    if (!.has_select_value(ws_grp) || identical(ws_grp, "__NO_GROUP__")) {
       journey_sessions <- ss %>%
-        filter(org_name == input$within_session_org, is.na(group) | group == "") %>%
+        filter(org_name == ws_org, is.na(group) | group == "") %>%
         arrange(date, start_time)
     } else {
       journey_sessions <- ss %>%
-        filter(org_name == input$within_session_org, group == input$within_session_group) %>%
+        filter(org_name == ws_org, group == ws_grp) %>%
         arrange(date, start_time)
     }
     
@@ -10341,7 +10356,7 @@ server <- function(input, output, session) {
   output$within_session_journey_info <- renderUI({
     journey <- within_session_journey()
     if (is.null(journey)) {
-      if (input$within_session_org == "") {
+      if (!.has_select_value(tryCatch(input$within_session_org, error = function(e) NULL))) {
         return(HTML("<p style='color: #797d82;'>Select an organization to view series information. If the organization has groups, also select a group.</p>"))
       } else {
         return(HTML("<p style='color: #797d82;'>No series found for the selected organization and group combination.</p>"))
@@ -10626,7 +10641,7 @@ server <- function(input, output, session) {
     org <- input$journey_detail_org
     group <- input$journey_detail_group
     
-    if (is.null(org) || org == "") {
+    if (!.has_select_value(org)) {
       return(HTML("<p>Please select an organization.</p>"))
     }
     
@@ -10634,9 +10649,9 @@ server <- function(input, output, session) {
     journey_sessions <- session_summary %>%
       filter(org_name == org)
     
-    if (!is.null(group) && group != "" && group != "__NO_GROUP__") {
+    if (.has_select_value(group) && !identical(group, "__NO_GROUP__")) {
       journey_sessions <- journey_sessions %>% filter(group == group)
-    } else if (group == "__NO_GROUP__") {
+    } else if (identical(group, "__NO_GROUP__")) {
       journey_sessions <- journey_sessions %>% filter(is.na(group) | group == "")
     }
     
@@ -10650,7 +10665,7 @@ server <- function(input, output, session) {
     
     HTML(paste0(
       "<p><strong>Organization:</strong> ", org, "<br>",
-      ifelse(!is.null(group) && group != "" && group != "__NO_GROUP__", 
+      ifelse(.has_select_value(group) && !identical(group, "__NO_GROUP__"), 
              paste0("<strong>Group:</strong> ", group, "<br>"), ""),
       "<strong>Number of Sessions:</strong> ", num_sessions, "<br>",
       ifelse(length(sessions_in_series) > 0,
@@ -10664,7 +10679,7 @@ server <- function(input, output, session) {
     org <- input$journey_detail_org
     group <- input$journey_detail_group
     
-    if (is.null(org) || org == "") return(data.frame())
+    if (!.has_select_value(org)) return(data.frame())
     
     session_summary <- session_summary_data()
     post_data <- filtered_big_post()
@@ -10673,9 +10688,9 @@ server <- function(input, output, session) {
       filter(org_name == org) %>%
       arrange(session_number)
     
-    if (!is.null(group) && group != "" && group != "__NO_GROUP__") {
+    if (.has_select_value(group) && !identical(group, "__NO_GROUP__")) {
       journey_sessions <- journey_sessions %>% filter(group == group)
-    } else if (group == "__NO_GROUP__") {
+    } else if (identical(group, "__NO_GROUP__")) {
       journey_sessions <- journey_sessions %>% filter(is.na(group) | group == "")
     }
     
@@ -10730,8 +10745,8 @@ server <- function(input, output, session) {
   })
   
   observe({
-    org <- input$journey_detail_org
-    if (is.null(org) || org == "") {
+    org <- tryCatch(input$journey_detail_org, error = function(e) NULL)
+    if (!.has_select_value(org)) {
       updateSelectInput(session, "journey_detail_group", choices = c("Select group..." = ""))
       return()
     }
