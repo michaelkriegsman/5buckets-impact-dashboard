@@ -105,6 +105,16 @@ MASTER_POST_SHEET_NAME <- "Post Submissions"
 PROGRAM_MANAGER_SHEET_ID <- Sys.getenv("PROGRAM_MANAGER_SHEET_ID", unset = "1aefJFVQtfYx2UCd5u9q1pl0raJXVzXaW8pKlzZRMXuQ")
 PROGRAM_MANAGER_SHEET_NAME <- "Workshops"
 
+# Mercy custom-flow Program Manager (separate Workshops sheet; session_ids do not live on company PM)
+MERCY_PROGRAM_MANAGER_SHEET_ID <- Sys.getenv(
+  "MERCY_PROGRAM_MANAGER_SHEET_ID",
+  unset = "12XH-SbHwHGYHVPSfx7DrShuUC18btE2XnTKMiilU8iI"
+)
+MERCY_PROGRAM_MANAGER_SHEET_NAME <- Sys.getenv(
+  "MERCY_PROGRAM_MANAGER_SHEET_NAME",
+  unset = "Workshops"
+)
+
 # Google Sheets URLs (for hyperlinks)
 MASTER_PRE_URL <- paste0("https://docs.google.com/spreadsheets/d/", MASTER_PRE_SHEET_ID, "/edit")
 MASTER_POST_URL <- paste0("https://docs.google.com/spreadsheets/d/", MASTER_POST_SHEET_ID, "/edit")
@@ -229,17 +239,86 @@ load_master_post <- function() {
   })
 }
 
+load_program_manager_sheet <- function(sheet_id, sheet_name, label = "Program Manager") {
+  if (is.null(sheet_id) || !nzchar(sheet_id)) return(data.frame())
+  tryCatch({
+    read_sheet(sheet_id, sheet = sheet_name)
+  }, error = function(e) {
+    warning("Error loading ", label, ": ", e$message)
+    data.frame()
+  })
+}
+
 load_program_manager <- function() {
   if (PROGRAM_MANAGER_SHEET_ID == "") {
     warning("PROGRAM_MANAGER_SHEET_ID not set. Using empty data frame.")
     return(data.frame())
   }
-  tryCatch({
-    read_sheet(PROGRAM_MANAGER_SHEET_ID, sheet = PROGRAM_MANAGER_SHEET_NAME)
-  }, error = function(e) {
-    warning("Error loading Program Manager data: ", e$message)
-    return(data.frame())
-  })
+  load_program_manager_sheet(PROGRAM_MANAGER_SHEET_ID, PROGRAM_MANAGER_SHEET_NAME, "Program Manager")
+}
+
+load_mercy_program_manager <- function() {
+  load_program_manager_sheet(
+    MERCY_PROGRAM_MANAGER_SHEET_ID,
+    MERCY_PROGRAM_MANAGER_SHEET_NAME,
+    "Mercy Program Manager"
+  )
+}
+
+#' Normalize PM rows so company + Mercy Workshops can be stacked for session typing.
+normalize_program_manager_for_typing <- function(pm, source_label = NA_character_) {
+  if (is.null(pm) || nrow(pm) == 0) {
+    return(data.frame(
+      session_id = character(0),
+      session_number = numeric(0),
+      sessions_in_series = numeric(0),
+      org_name = character(0),
+      group = character(0),
+      pm_source = character(0),
+      stringsAsFactors = FALSE
+    ))
+  }
+  nms <- names(pm)
+  nms_l <- tolower(trimws(nms))
+  pick <- function(cands) {
+    idx <- which(nms_l %in% tolower(cands))[1]
+    if (is.na(idx)) return(NULL)
+    nms[idx]
+  }
+  sid_col <- pick(c("session_id", "session id", "session link"))
+  num_col <- pick(c("session_number", "session number"))
+  ser_col <- pick(c("sessions_in_series", "sessions in series"))
+  org_col <- pick(c("org_name", "organization", "org"))
+  grp_col <- pick(c("group"))
+  out <- data.frame(
+    session_id = if (!is.null(sid_col)) trimws(as.character(pm[[sid_col]])) else rep(NA_character_, nrow(pm)),
+    session_number = if (!is.null(num_col)) suppressWarnings(as.numeric(unlist(pm[[num_col]]))) else rep(NA_real_, nrow(pm)),
+    sessions_in_series = if (!is.null(ser_col)) suppressWarnings(as.numeric(unlist(pm[[ser_col]]))) else rep(NA_real_, nrow(pm)),
+    org_name = if (!is.null(org_col)) trimws(as.character(unlist(pm[[org_col]]))) else rep(NA_character_, nrow(pm)),
+    group = if (!is.null(grp_col)) trimws(as.character(unlist(pm[[grp_col]]))) else rep(NA_character_, nrow(pm)),
+    pm_source = rep(as.character(source_label), nrow(pm)),
+    stringsAsFactors = FALSE
+  )
+  out <- out[!is.na(out$session_id) & nzchar(out$session_id), , drop = FALSE]
+  # Prefer rows that carry series metadata when the same session_id appears twice
+  if (nrow(out) == 0) return(out)
+  out$._rank <- ifelse(!is.na(out$session_number) & !is.na(out$sessions_in_series), 1L, 2L)
+  out <- out[order(out$session_id, out$._rank), , drop = FALSE]
+  out <- out[!duplicated(out$session_id), , drop = FALSE]
+  out$._rank <- NULL
+  out
+}
+
+#' Company PM + Mercy PM, deduped by session_id (for Big/Little Pre/Post typing).
+combine_program_managers_for_typing <- function(pm_company, pm_mercy = NULL) {
+  a <- normalize_program_manager_for_typing(pm_company, "company")
+  b <- normalize_program_manager_for_typing(pm_mercy, "mercy")
+  if (nrow(a) == 0 && nrow(b) == 0) return(a)
+  if (nrow(a) == 0) return(b)
+  if (nrow(b) == 0) return(a)
+  # Company first; Mercy fills session_ids company does not have
+  only_mercy <- b[!b$session_id %in% a$session_id, , drop = FALSE]
+  rbind(a, only_mercy)
 }
 
 # ============================================================================

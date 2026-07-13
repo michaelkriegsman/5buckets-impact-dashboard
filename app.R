@@ -1804,7 +1804,13 @@ ui <- fluidPage(
                   tags$em("Note."), " Counts reflect the current sidebar filters. ",
                   "Sessions do not sum across Pre and Post \u2014 a single session can contribute both a pre and a post, ",
                   "so Total sessions \u2265 either column. Responses do sum (Total = Pre + Post). ",
-                  "Average responses per session = responses \u00f7 sessions.")
+                  "Average responses per session = responses \u00f7 sessions."),
+                h6("By survey type (Big / Little)", style = "color: #5c2f92; margin-top: 16px; margin-bottom: 6px;"),
+                div(style = "width: fit-content; max-width: 720px;", tableOutput("impact_overview_survey_type_stats_table")),
+                p(style = "font-size: 12px; color: #5f6369; margin-top: 8px; max-width: 720px;",
+                  tags$em("Note."), " Big = first/last session in a series (or single-session workshops). ",
+                  "Little = mid-series sessions. Response Total = Big Pre + Little Pre + Little Post + Big Post. ",
+                  "Session totals are distinct ", tags$code("session_id"), "s and do not sum across columns.")
               ),
               tags$details(
                 open = FALSE,
@@ -3303,6 +3309,7 @@ server <- function(input, output, session) {
   master_pre_val <- reactiveVal(data.frame())
   master_post_val <- reactiveVal(data.frame())
   program_manager_val <- reactiveVal(data.frame())
+  mercy_program_manager_val <- reactiveVal(data.frame())
   
   load_all_data <- function() {
     # Ensure overlay is shown while loading and always cleared at the end,
@@ -3322,9 +3329,14 @@ server <- function(input, output, session) {
       warning("load_program_manager: ", conditionMessage(e))
       data.frame()
     })
+    pm_mercy <- tryCatch(load_mercy_program_manager(), error = function(e) {
+      warning("load_mercy_program_manager: ", conditionMessage(e))
+      data.frame()
+    })
     master_pre_val(pre)
     master_post_val(post)
     program_manager_val(pm)
+    mercy_program_manager_val(pm_mercy)
   }
 
   # Initial load after first paint so users actually see the loading overlay
@@ -3370,6 +3382,11 @@ server <- function(input, output, session) {
   master_pre <- reactive(master_pre_val())
   master_post <- reactive(master_post_val())
   program_manager <- reactive(program_manager_val())
+  mercy_program_manager <- reactive(mercy_program_manager_val())
+  # Full company + Mercy PM for Big/Little Pre/Post typing (not org-filtered).
+  program_manager_for_typing <- reactive({
+    combine_program_managers_for_typing(program_manager(), mercy_program_manager())
+  })
   observeEvent(plotly::event_data("plotly_relayout", source = "zipmap_pre"), {
     req(data_ready())
     ev <- plotly::event_data("plotly_relayout", source = "zipmap_pre")
@@ -3582,24 +3599,45 @@ server <- function(input, output, session) {
     ignoreNULL = FALSE
   )
   
-  # Big Pre data (filtered and typed)
+  # Big Pre data (filtered and typed via company + Mercy PM)
   filtered_big_pre <- reactive({
     pre_data <- filtered_pre()
-    pm_data <- filtered_program_manager()
+    pm_data <- program_manager_for_typing()
     if (nrow(pre_data) == 0) return(data.frame())
     
     pre_typed <- identify_survey_type(pre_data, pm_data)
     pre_typed %>% filter(is_big_pre == TRUE)
   })
   
-  # Big Post data (filtered and typed)
+  # Post data for Impact tabs: typed with company + Mercy PM.
+  # Includes Big Post and Little Post rows — Little Post carries satisfaction, learning, open text, etc.
+  # Big Post-only metrics (e.g. "Compared to before…") show empty states when those fields are absent.
   filtered_big_post <- reactive({
     post_data <- filtered_post()
-    pm_data <- filtered_program_manager()
+    pm_data <- program_manager_for_typing()
     if (nrow(post_data) == 0) return(data.frame())
-    
-    post_typed <- identify_survey_type(post_data, pm_data)
-    post_typed %>% filter(is_big_post == TRUE)
+    identify_survey_type(post_data, pm_data)
+  })
+  
+  # Strict Big Post only (last session in series) — for indices that require Compared-to-before items.
+  filtered_big_post_only <- reactive({
+    post_data <- filtered_big_post()
+    if (nrow(post_data) == 0 || !"is_big_post" %in% names(post_data)) return(post_data)
+    post_data[post_data$is_big_post == TRUE, , drop = FALSE]
+  })
+
+  filtered_little_pre <- reactive({
+    pre_data <- filtered_pre()
+    pm_data <- program_manager_for_typing()
+    if (nrow(pre_data) == 0) return(data.frame())
+    pre_typed <- identify_survey_type(pre_data, pm_data)
+    pre_typed %>% dplyr::filter(is_big_pre == FALSE)
+  })
+
+  filtered_little_post <- reactive({
+    post_data <- filtered_big_post()
+    if (nrow(post_data) == 0 || !"is_big_post" %in% names(post_data)) return(data.frame())
+    post_data[post_data$is_big_post == FALSE, , drop = FALSE]
   })
 
   filter_cache_key <- reactive({
@@ -4052,7 +4090,7 @@ server <- function(input, output, session) {
     }, error = function(e) { warning("organization_completed_data error: ", conditionMessage(e)); data.frame() })
   })
   
-  register_dashboard_modules(input, output, session, filtered_big_pre, filtered_big_post)
+  register_dashboard_modules(input, output, session, filtered_pre, filtered_post)
 
   .render_org_table <- function(org_summary, selection = "none") {
     if (is.null(org_summary) || nrow(org_summary) == 0) return(DT::datatable(data.frame(Message = "No data."), rownames = FALSE))
@@ -4431,11 +4469,31 @@ server <- function(input, output, session) {
   })
   output$impact_post_hist <- renderPlotly({
     tryCatch({
-      big_post_data <- filtered_big_post()
-      if (nrow(big_post_data) == 0) return(plotly_empty())
+      big_post_data <- filtered_big_post_only()
+      if (nrow(big_post_data) == 0) {
+        all_post <- filtered_big_post()
+        empty_msg <- if (nrow(all_post) > 0) "No Big Post in filter" else "No data"
+        return(plotly_empty() %>% layout(
+          title = list(
+            text = paste0("Post Impact Index<br><span style='font-size:11px;color:#5f6369;'>", empty_msg, "</span>"),
+            font = PLOT_FONT
+          ),
+          margin = list(t = 56),
+          font = PLOT_FONT
+        ))
+      }
       impact_idx <- calculate_post_impact_index(big_post_data)
       impact_idx <- impact_idx[!is.na(impact_idx)]
-      if (length(impact_idx) == 0) return(plotly_empty())
+      if (length(impact_idx) == 0) {
+        return(plotly_empty() %>% layout(
+          title = list(
+            text = "Post Impact Index<br><span style='font-size:11px;color:#5f6369;'>No Compared-to-before answers</span>",
+            font = PLOT_FONT
+          ),
+          margin = list(t = 56),
+          font = PLOT_FONT
+        ))
+      }
       show_bars <- tryCatch(isTRUE(input$wellness_index_post_bars), error = function(e) TRUE)
       show_curves <- tryCatch(isTRUE(input$wellness_index_post_curves), error = function(e) TRUE)
       if (!show_bars && !show_curves) {
@@ -4559,19 +4617,32 @@ server <- function(input, output, session) {
       paste(parts, collapse = "\n")
     }, character(1))
   }
-  .render_likert_hist <- function(data, col, title, color = "#5c2f92", y_max_override = NULL, show_bar_n = FALSE, show_bar_pct = FALSE) {
+  # Compact Plotly title: short metric name; empty reason on a second line when needed.
+  .plot_title <- function(title, empty_msg = NULL) {
+    if (is.null(empty_msg) || !nzchar(empty_msg)) {
+      return(list(text = title, font = PLOT_FONT))
+    }
+    list(
+      text = paste0(title, "<br><span style='font-size:11px;color:#5f6369;'>", empty_msg, "</span>"),
+      font = PLOT_FONT
+    )
+  }
+  .render_likert_hist <- function(data, col, title, color = "#5c2f92", y_max_override = NULL, show_bar_n = FALSE, show_bar_pct = FALSE, big_post_only = FALSE) {
     if (nrow(data) == 0 || is.null(col) || !col %in% colnames(data)) {
-      return(plotly_empty() %>% layout(title = paste0(title, " (no data)"), font = PLOT_FONT))
+      empty_msg <- if (isTRUE(big_post_only)) "No Big Post data" else "No data"
+      return(plotly_empty() %>% layout(title = .plot_title(title, empty_msg), margin = list(t = 56), font = PLOT_FONT))
     }
     raw <- data[[col]]
     raw <- raw[!is.na(raw) & as.character(raw) != ""]
     if (length(raw) == 0) {
-      return(plotly_empty() %>% layout(title = paste0(title, " (no responses)"), font = PLOT_FONT))
+      empty_msg <- "No responses"
+      if (isTRUE(big_post_only)) empty_msg <- "No Big Post answers"
+      return(plotly_empty() %>% layout(title = .plot_title(title, empty_msg), margin = list(t = 56), font = PLOT_FONT))
     }
     tbl <- get_ordered_likert_table(data[[col]])
     counts <- as.numeric(tbl)
     if (length(counts) == 0 || sum(counts, na.rm = TRUE) == 0) {
-      return(plotly_empty() %>% layout(title = paste0(title, " (no responses)"), font = PLOT_FONT))
+      return(plotly_empty() %>% layout(title = .plot_title(title, "No responses"), margin = list(t = 56), font = PLOT_FONT))
     }
     base_max <- if (!is.null(y_max_override) && is.finite(y_max_override) && y_max_override > 0) y_max_override else max(counts, na.rm = TRUE)
     y_max <- base_max * .label_headroom_factor(show_bar_n, show_bar_pct)
@@ -4585,7 +4656,7 @@ server <- function(input, output, session) {
       cliponaxis = FALSE
     ) %>%
       layout(
-        title = title,
+        title = .plot_title(title),
         font = PLOT_FONT,
         margin = list(l = 55, r = 20, t = 50, b = 65),
         xaxis = list(title = "Response", categoryorder = "array",
@@ -4664,7 +4735,7 @@ server <- function(input, output, session) {
   # Reactive: shared y-max across all Post Likert hists (for Same Y axes checkbox)
   post_wellness_ymax <- reactive({
     if (!tryCatch(isTRUE(input$opt_same_y), error = function(e) FALSE)) return(NULL)
-    data <- filtered_big_post()
+    data <- filtered_big_post_only()
     if (is.null(data) || nrow(data) == 0) return(NULL)
     col1 <- grep("better understanding of the topics covered", colnames(data), ignore.case = TRUE, value = TRUE)[1]
     col2 <- find_col(data, POST_COMPARED_TO_COLS[2], exact = TRUE); if (is.null(col2)) col2 <- grep("aware.*how much money|how much money I have", colnames(data), ignore.case = TRUE, value = TRUE)[1]
@@ -4693,81 +4764,81 @@ server <- function(input, output, session) {
   # Post: 3 awareness histograms (match column - try multiple patterns)
   output$impact_post_awareness_amount_hist <- renderPlotly({
     tryCatch({
-      data <- filtered_big_post()
+      data <- filtered_big_post_only()
       col <- find_col(data, POST_COMPARED_TO_COLS[2], exact = TRUE)
       if (is.null(col)) col <- grep("aware.*how much money|how much money I have", colnames(data), ignore.case = TRUE, value = TRUE)[1]
       if (is.null(col)) col <- grep("Compared to before", colnames(data), ignore.case = TRUE, value = TRUE)[2]
       bf <- .wellness_bar_label_flags()
-      .render_likert_hist(data, col, "Awareness: Amount", REACH_PALETTE[1], y_max_override = post_wellness_ymax(), show_bar_n = bf$n, show_bar_pct = bf$pct)
+      .render_likert_hist(data, col, "Awareness: Amount", REACH_PALETTE[1], y_max_override = post_wellness_ymax(), show_bar_n = bf$n, show_bar_pct = bf$pct, big_post_only = TRUE)
     }, error = function(e) plotly_empty() %>% layout(title = paste("Error:", conditionMessage(e)), font = PLOT_FONT))
   })
   output$impact_post_awareness_afford_hist <- renderPlotly({
     tryCatch({
-      data <- filtered_big_post()
+      data <- filtered_big_post_only()
       col <- find_col(data, POST_COMPARED_TO_COLS[3], exact = TRUE)
       if (is.null(col)) col <- grep("aware.*what I can afford|what I can afford", colnames(data), ignore.case = TRUE, value = TRUE)[1]
       if (is.null(col)) col <- grep("Compared to before", colnames(data), ignore.case = TRUE, value = TRUE)[3]
       bf <- .wellness_bar_label_flags()
-      .render_likert_hist(data, col, "Awareness: Afford", REACH_PALETTE[2], y_max_override = post_wellness_ymax(), show_bar_n = bf$n, show_bar_pct = bf$pct)
+      .render_likert_hist(data, col, "Awareness: Afford", REACH_PALETTE[2], y_max_override = post_wellness_ymax(), show_bar_n = bf$n, show_bar_pct = bf$pct, big_post_only = TRUE)
     }, error = function(e) plotly_empty() %>% layout(title = paste("Error:", conditionMessage(e)), font = PLOT_FONT))
   })
   output$impact_post_awareness_where_hist <- renderPlotly({
     tryCatch({
-      data <- filtered_big_post()
+      data <- filtered_big_post_only()
       col <- find_col(data, POST_COMPARED_TO_COLS[4], exact = TRUE)
       if (is.null(col)) col <- grep("aware.*where my money|where my money goes", colnames(data), ignore.case = TRUE, value = TRUE)[1]
       if (is.null(col)) col <- grep("Compared to before", colnames(data), ignore.case = TRUE, value = TRUE)[4]
       bf <- .wellness_bar_label_flags()
-      .render_likert_hist(data, col, "Awareness: Where", REACH_PALETTE[3], y_max_override = post_wellness_ymax(), show_bar_n = bf$n, show_bar_pct = bf$pct)
+      .render_likert_hist(data, col, "Awareness: Where", REACH_PALETTE[3], y_max_override = post_wellness_ymax(), show_bar_n = bf$n, show_bar_pct = bf$pct, big_post_only = TRUE)
     }, error = function(e) plotly_empty() %>% layout(title = paste("Error:", conditionMessage(e)), font = PLOT_FONT))
   })
   # Post: understanding + 5 remaining wellness histograms (dedicated for Impact tab)
   output$impact_post_understanding_hist <- renderPlotly({
     tryCatch({
-      data <- filtered_big_post()
+      data <- filtered_big_post_only()
       col <- grep("better understanding of the topics covered", colnames(data), ignore.case = TRUE, value = TRUE)[1]
       bf <- .wellness_bar_label_flags()
-      .render_likert_hist(data, col, "Better Understanding of Topics", REACH_PALETTE[1], y_max_override = post_wellness_ymax(), show_bar_n = bf$n, show_bar_pct = bf$pct)
+      .render_likert_hist(data, col, "Understanding", REACH_PALETTE[1], y_max_override = post_wellness_ymax(), show_bar_n = bf$n, show_bar_pct = bf$pct, big_post_only = TRUE)
     }, error = function(e) plotly_empty() %>% layout(title = paste("Error:", conditionMessage(e))))
   })
   output$impact_post_optimism_hist <- renderPlotly({
     tryCatch({
-      data <- filtered_big_post()
+      data <- filtered_big_post_only()
       col <- grep("more optimistic about my financial future", colnames(data), ignore.case = TRUE, value = TRUE)[1]
       bf <- .wellness_bar_label_flags()
-      .render_likert_hist(data, col, "More Optimistic About Financial Future", REACH_PALETTE[2], y_max_override = post_wellness_ymax(), show_bar_n = bf$n, show_bar_pct = bf$pct)
+      .render_likert_hist(data, col, "Optimism", REACH_PALETTE[2], y_max_override = post_wellness_ymax(), show_bar_n = bf$n, show_bar_pct = bf$pct, big_post_only = TRUE)
     }, error = function(e) plotly_empty() %>% layout(title = paste("Error:", conditionMessage(e))))
   })
   output$impact_post_relationship_hist <- renderPlotly({
     tryCatch({
-      data <- filtered_big_post()
+      data <- filtered_big_post_only()
       col <- grep("healthier relationship with money", colnames(data), ignore.case = TRUE, value = TRUE)[1]
       bf <- .wellness_bar_label_flags()
-      .render_likert_hist(data, col, "Healthier Relationship with Money", REACH_PALETTE[3], y_max_override = post_wellness_ymax(), show_bar_n = bf$n, show_bar_pct = bf$pct)
+      .render_likert_hist(data, col, "Relationship", REACH_PALETTE[3], y_max_override = post_wellness_ymax(), show_bar_n = bf$n, show_bar_pct = bf$pct, big_post_only = TRUE)
     }, error = function(e) plotly_empty() %>% layout(title = paste("Error:", conditionMessage(e))))
   })
   output$impact_post_stress_hist <- renderPlotly({
     tryCatch({
-      data <- filtered_big_post()
+      data <- filtered_big_post_only()
       col <- grep("stress.*financ|able to manage stress|better able to manage stress", colnames(data), ignore.case = TRUE, value = TRUE)[1]
       bf <- .wellness_bar_label_flags()
-      .render_likert_hist(data, col, "Better Able to Manage Financial Stress", REACH_PALETTE[4], y_max_override = post_wellness_ymax(), show_bar_n = bf$n, show_bar_pct = bf$pct)
+      .render_likert_hist(data, col, "Stress management", REACH_PALETTE[4], y_max_override = post_wellness_ymax(), show_bar_n = bf$n, show_bar_pct = bf$pct, big_post_only = TRUE)
     }, error = function(e) plotly_empty() %>% layout(title = paste("Error:", conditionMessage(e))))
   })
   output$impact_post_confidence_hist <- renderPlotly({
     tryCatch({
-      data <- filtered_big_post()
+      data <- filtered_big_post_only()
       col <- grep("more confident.*plan|confident planning ahead", colnames(data), ignore.case = TRUE, value = TRUE)[1]
       bf <- .wellness_bar_label_flags()
-      .render_likert_hist(data, col, "More Confident in Planning", REACH_PALETTE[5], y_max_override = post_wellness_ymax(), show_bar_n = bf$n, show_bar_pct = bf$pct)
+      .render_likert_hist(data, col, "Planning confidence", REACH_PALETTE[5], y_max_override = post_wellness_ymax(), show_bar_n = bf$n, show_bar_pct = bf$pct, big_post_only = TRUE)
     }, error = function(e) plotly_empty() %>% layout(title = paste("Error:", conditionMessage(e))))
   })
   output$impact_post_comfort_hist <- renderPlotly({
     tryCatch({
-      data <- filtered_big_post()
+      data <- filtered_big_post_only()
       col <- grep("more comfortable speaking with financial professionals", colnames(data), ignore.case = TRUE, value = TRUE)[1]
       bf <- .wellness_bar_label_flags()
-      .render_likert_hist(data, col, "More Comfortable with Financial Professionals", REACH_PALETTE[6], y_max_override = post_wellness_ymax(), show_bar_n = bf$n, show_bar_pct = bf$pct)
+      .render_likert_hist(data, col, "Comfort w/ professionals", REACH_PALETTE[6], y_max_override = post_wellness_ymax(), show_bar_n = bf$n, show_bar_pct = bf$pct, big_post_only = TRUE)
     }, error = function(e) plotly_empty() %>% layout(title = paste("Error:", conditionMessage(e))))
   })
   format_p_value <- function(p) {
@@ -4780,7 +4851,7 @@ server <- function(input, output, session) {
   output$impact_wellness_between_summary <- renderUI({
     tryCatch({
       big_pre <- filtered_big_pre()
-      big_post <- filtered_big_post()
+      big_post <- filtered_big_post_only()
       pre_idx <- calculate_wellness_index(big_pre)
       post_idx <- calculate_post_impact_index(big_post)
       pre_idx <- pre_idx[!is.na(pre_idx)]
@@ -4826,7 +4897,7 @@ server <- function(input, output, session) {
       br <- seq(-3, 3, length.out = bins + 1L)
       bw <- 6 / bins
       big_pre <- filtered_big_pre()
-      big_post <- filtered_big_post()
+      big_post <- filtered_big_post_only()
       pre_idx <- calculate_wellness_index(big_pre)
       post_idx <- calculate_post_impact_index(big_post)
       pre_idx <- pre_idx[!is.na(pre_idx)]
@@ -4967,7 +5038,7 @@ server <- function(input, output, session) {
   # Pair on respondent_id only (any session in current filters). Does not require same session_id.
   .get_wellness_paired <- function() {
     big_pre <- filtered_big_pre()
-    big_post <- filtered_big_post()
+    big_post <- filtered_big_post_only()
     if (nrow(big_pre) == 0 || nrow(big_post) == 0) return(NULL)
     if (!"respondent_id" %in% colnames(big_pre) || !"respondent_id" %in% colnames(big_post)) return(NULL)
     pre_idx <- calculate_wellness_index(big_pre)
@@ -5605,6 +5676,25 @@ server <- function(input, output, session) {
       pre_n = tryCatch(nrow(filtered_pre()), error = function(e) NA_integer_),
       post_n = tryCatch(nrow(filtered_post()), error = function(e) NA_integer_),
       big_pre_n = tryCatch(nrow(filtered_big_pre()), error = function(e) NA_integer_),
+      little_pre_n = tryCatch(nrow(filtered_little_pre()), error = function(e) NA_integer_),
+      little_post_n = tryCatch(nrow(filtered_little_post()), error = function(e) NA_integer_),
+      big_post_n = tryCatch(nrow(filtered_big_post_only()), error = function(e) NA_integer_),
+      big_pre_sessions = tryCatch({
+        d <- filtered_big_pre()
+        if (nrow(d) == 0 || !"session_id" %in% names(d)) 0L else length(unique(trimws(as.character(d$session_id[!is.na(d$session_id) & nzchar(trimws(as.character(d$session_id)))]))))
+      }, error = function(e) 0L),
+      little_pre_sessions = tryCatch({
+        d <- filtered_little_pre()
+        if (nrow(d) == 0 || !"session_id" %in% names(d)) 0L else length(unique(trimws(as.character(d$session_id[!is.na(d$session_id) & nzchar(trimws(as.character(d$session_id)))]))))
+      }, error = function(e) 0L),
+      little_post_sessions = tryCatch({
+        d <- filtered_little_post()
+        if (nrow(d) == 0 || !"session_id" %in% names(d)) 0L else length(unique(trimws(as.character(d$session_id[!is.na(d$session_id) & nzchar(trimws(as.character(d$session_id)))]))))
+      }, error = function(e) 0L),
+      big_post_sessions = tryCatch({
+        d <- filtered_big_post_only()
+        if (nrow(d) == 0 || !"session_id" %in% names(d)) 0L else length(unique(trimws(as.character(d$session_id[!is.na(d$session_id) & nzchar(trimws(as.character(d$session_id)))]))))
+      }, error = function(e) 0L),
       lang_sel = tryCatch(input$filter_language, error = function(e) "All")
     )
   }) %>% debounce(350)
@@ -5644,6 +5734,46 @@ server <- function(input, output, session) {
     names(out)[1] <- ""
     out
   }, striped = TRUE, bordered = TRUE, spacing = "s", width = "100%", align = "lrrr")
+
+  output$impact_overview_survey_type_stats_table <- renderTable({
+    bundle <- summary_stats_bundle()
+    fmt_int <- function(x) formatC(round(as.numeric(x)), format = "d", big.mark = ",")
+    fmt_avg <- function(resp, sess) {
+      if (!is.finite(sess) || sess <= 0) return("-")
+      formatC(round(as.numeric(resp) / as.numeric(sess), 1), format = "f", digits = 1)
+    }
+    bp <- if (is.finite(bundle$big_pre_n)) bundle$big_pre_n else 0L
+    lp <- if (is.finite(bundle$little_pre_n)) bundle$little_pre_n else 0L
+    lpo <- if (is.finite(bundle$little_post_n)) bundle$little_post_n else 0L
+    bpo <- if (is.finite(bundle$big_post_n)) bundle$big_post_n else 0L
+    bp_s <- if (is.finite(bundle$big_pre_sessions)) bundle$big_pre_sessions else 0L
+    lp_s <- if (is.finite(bundle$little_pre_sessions)) bundle$little_pre_sessions else 0L
+    lpo_s <- if (is.finite(bundle$little_post_sessions)) bundle$little_post_sessions else 0L
+    bpo_s <- if (is.finite(bundle$big_post_sessions)) bundle$big_post_sessions else 0L
+    # Distinct sessions across all typed rows (may be < sum of columns)
+    all_sids <- character(0)
+    for (getter in list(filtered_big_pre, filtered_little_pre, filtered_little_post, filtered_big_post_only)) {
+      d <- tryCatch(getter(), error = function(e) data.frame())
+      if (nrow(d) > 0 && "session_id" %in% names(d)) {
+        s <- trimws(as.character(d$session_id))
+        all_sids <- c(all_sids, s[!is.na(s) & nzchar(s)])
+      }
+    }
+    total_sessions <- length(unique(all_sids))
+    total_resp <- bp + lp + lpo + bpo
+    out <- data.frame(
+      Metric = c("Sessions", "Responses", "Average responses per session"),
+      Total = c(fmt_int(total_sessions), fmt_int(total_resp), "-"),
+      `Big Pre` = c(fmt_int(bp_s), fmt_int(bp), fmt_avg(bp, bp_s)),
+      `Little Pre` = c(fmt_int(lp_s), fmt_int(lp), fmt_avg(lp, lp_s)),
+      `Little Post` = c(fmt_int(lpo_s), fmt_int(lpo), fmt_avg(lpo, lpo_s)),
+      `Big Post` = c(fmt_int(bpo_s), fmt_int(bpo), fmt_avg(bpo, bpo_s)),
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+    names(out)[1] <- ""
+    out
+  }, striped = TRUE, bordered = TRUE, spacing = "s", width = "100%", align = "lrrrrr")
 
   # Summary statistics output (Overview tab — At a Glance HTML block).
   output$session_summary_stats <- renderUI({
@@ -8236,7 +8366,7 @@ server <- function(input, output, session) {
   })
   
   output$big_post_impact_optimism_hist <- renderPlotly({
-    big_post_data <- filtered_big_post()
+    big_post_data <- filtered_big_post_only()
     if (nrow(big_post_data) == 0) return(plotly_empty())
     
     col <- grep("more optimistic about my financial future", colnames(big_post_data), ignore.case = TRUE, value = TRUE)
@@ -8253,7 +8383,7 @@ server <- function(input, output, session) {
   })
   
   output$big_post_impact_relationship_hist <- renderPlotly({
-    big_post_data <- filtered_big_post()
+    big_post_data <- filtered_big_post_only()
     if (nrow(big_post_data) == 0) return(plotly_empty())
     
     col <- grep("healthier relationship with money", colnames(big_post_data), ignore.case = TRUE, value = TRUE)
@@ -8270,7 +8400,7 @@ server <- function(input, output, session) {
   })
   
   output$big_post_impact_stress_hist <- renderPlotly({
-    big_post_data <- filtered_big_post()
+    big_post_data <- filtered_big_post_only()
     if (nrow(big_post_data) == 0) return(plotly_empty())
     
     col <- grep("feel less stress about my finances|better able to manage stress|stress.*financ", colnames(big_post_data), ignore.case = TRUE, value = TRUE)
@@ -8287,7 +8417,7 @@ server <- function(input, output, session) {
   })
   
   output$big_post_impact_confidence_hist <- renderPlotly({
-    big_post_data <- filtered_big_post()
+    big_post_data <- filtered_big_post_only()
     if (nrow(big_post_data) == 0) return(plotly_empty())
     
     col <- grep("more confident I can plan ahead", colnames(big_post_data), ignore.case = TRUE, value = TRUE)
@@ -8304,7 +8434,7 @@ server <- function(input, output, session) {
   })
   
   output$big_post_impact_comfort_hist <- renderPlotly({
-    big_post_data <- filtered_big_post()
+    big_post_data <- filtered_big_post_only()
     if (nrow(big_post_data) == 0) return(plotly_empty())
     
     col <- grep("more comfortable speaking with financial professionals", colnames(big_post_data), ignore.case = TRUE, value = TRUE)
@@ -8321,7 +8451,7 @@ server <- function(input, output, session) {
   })
   
   output$big_post_impact_index_hist <- renderPlotly({
-    big_post_data <- filtered_big_post()
+    big_post_data <- filtered_big_post_only()
     if (nrow(big_post_data) == 0) return(plotly_empty())
     
     impact_index <- calculate_post_impact_index(big_post_data)
@@ -9157,7 +9287,7 @@ server <- function(input, output, session) {
   
   output$pairs_wellness_index_comparison <- renderPlotly({
     big_pre_data <- filtered_big_pre()
-    big_post_data <- filtered_big_post()
+    big_post_data <- filtered_big_post_only()
     
     if (nrow(big_pre_data) == 0 || nrow(big_post_data) == 0) return(plotly_empty())
     
@@ -9421,7 +9551,7 @@ server <- function(input, output, session) {
   # Summary Indices Scatter Plots
   output$pairs_wellness_index_scatter <- renderPlotly({
     big_pre_data <- filtered_big_pre()
-    big_post_data <- filtered_big_post()
+    big_post_data <- filtered_big_post_only()
     
     if (nrow(big_pre_data) == 0 || nrow(big_post_data) == 0) return(plotly_empty())
     
@@ -9478,7 +9608,7 @@ server <- function(input, output, session) {
   
   output$pairs_wellness_index_change <- renderPlotly({
     big_pre_data <- filtered_big_pre()
-    big_post_data <- filtered_big_post()
+    big_post_data <- filtered_big_post_only()
     
     if (nrow(big_pre_data) == 0 || nrow(big_post_data) == 0) return(plotly_empty())
     

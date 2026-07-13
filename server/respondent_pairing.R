@@ -45,7 +45,7 @@ respondent_pairing_html <- function(stats) {
   }
   paste0(
     "<div style='font-size:13px;line-height:1.5;'>",
-    "<strong>Respondent ID coverage</strong> (current filters)<br>",
+    "<strong>Respondent ID coverage</strong> (all filtered Pre/Post responses)<br>",
     "Distinct IDs: <strong>", stats$distinct_ids, "</strong> &nbsp;|&nbsp; ",
     "Pre: <strong>", stats$big_pre_ids, "</strong> &nbsp;|&nbsp; ",
     "Post: <strong>", stats$big_post_ids, "</strong><br>",
@@ -53,14 +53,14 @@ respondent_pairing_html <- function(stats) {
     if (!is.na(stats$pct_paired)) paste0(" (", stats$pct_paired, "% of distinct IDs)") else "",
     " &nbsp;|&nbsp; Pre only: ", stats$pre_only,
     " &nbsp;|&nbsp; Post only: ", stats$post_only,
-    "<br><span style='color:#5f6369;font-size:11px;'>Pairing uses respondent_id across all sessions in filter; sparse matches are expected when email differs between surveys.</span>",
+    "<br><span style='color:#5f6369;font-size:11px;'>Includes Little Post and Big Post responses. Pairing uses respondent_id across all sessions in filter; sparse matches are expected when email differs between surveys.</span>",
     "</div>"
   )
 }
 
-register_respondent_pairing_outputs <- function(input, output, session, filtered_big_pre, filtered_big_post) {
+register_respondent_pairing_outputs <- function(input, output, session, filtered_pre, filtered_post) {
   render_pairing_banner <- function() {
-    st <- compute_respondent_pairing_stats(filtered_big_pre(), filtered_big_post())
+    st <- compute_respondent_pairing_stats(filtered_pre(), filtered_post())
     HTML(respondent_pairing_html(st))
   }
   # Separate output IDs — Shiny allows only one output$ per id (Overview was blank when duplicated)
@@ -71,8 +71,8 @@ register_respondent_pairing_outputs <- function(input, output, session, filtered
     req(input$respondent_lookup_id)
     q <- trimws(input$respondent_lookup_id)
     if (!nzchar(q)) return(datatable(data.frame()))
-    pre <- filtered_big_pre()
-    post <- filtered_big_post()
+    pre <- filtered_pre()
+    post <- filtered_post()
     pick <- function(df) {
       if (!"respondent_id" %in% colnames(df)) return(df[0, , drop = FALSE])
       df[grepl(q, df$respondent_id, ignore.case = TRUE), , drop = FALSE]
