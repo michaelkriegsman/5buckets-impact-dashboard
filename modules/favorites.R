@@ -49,13 +49,27 @@ FAVORITES_FIGURE_CATALOG <- data.frame(
 FAVORITES_FIGURE_CATALOG$label <- vapply(FAVORITES_FIGURE_CATALOG$label, fav_label_ascii, character(1))
 
 collect_filter_snapshot <- function(input) {
+  orgs <- tryCatch({
+    x <- input$selected_org
+    if (is.null(x) || length(x) == 0) character(0) else {
+      x <- trimws(as.character(x))
+      x[x != "All" & nzchar(x) & !is.na(x)]
+    }
+  }, error = function(e) character(0))
+  grps <- tryCatch({
+    x <- input$selected_group
+    if (is.null(x) || length(x) == 0) character(0) else {
+      x <- trimws(as.character(x))
+      x[x != "All" & nzchar(x) & !is.na(x)]
+    }
+  }, error = function(e) character(0))
   list(
     tab_mode = input$tab_mode %||% "impact",
     use_date_filter = isTRUE(input$use_date_filter),
     date_start = as.character(input$date_range[1]),
     date_end = as.character(input$date_range[2]),
-    org = input$selected_org %||% "All",
-    group = input$selected_group %||% "All",
+    org = orgs,
+    group = grps,
     filter_gender = input$filter_gender,
     filter_veteran = input$filter_veteran,
     filter_income = input$filter_income,
@@ -133,8 +147,22 @@ register_favorites_server <- function(input, output, session) {
         start = as.Date(filters$date_start),
         end = as.Date(filters$date_end))
     }
-    if (!is.null(filters$org)) updateSelectInput(session, "selected_org", selected = filters$org)
-    if (!is.null(filters$group)) updateSelectInput(session, "selected_group", selected = filters$group)
+    if (!is.null(filters$org)) {
+      org_sel <- filters$org
+      if (identical(org_sel, "All") || (length(org_sel) == 1L && identical(as.character(org_sel), "All"))) {
+        org_sel <- character(0)
+      }
+      org_sel <- as.character(org_sel)
+      updateSelectizeInput(session, "selected_org", selected = org_sel)
+    }
+    if (!is.null(filters$group)) {
+      grp_sel <- filters$group
+      if (identical(grp_sel, "All") || (length(grp_sel) == 1L && identical(as.character(grp_sel), "All"))) {
+        grp_sel <- character(0)
+      }
+      grp_sel <- as.character(grp_sel)
+      updateSelectizeInput(session, "selected_group", selected = grp_sel)
+    }
     if (!is.null(filters$filter_gender)) updateCheckboxGroupInput(session, "filter_gender", selected = filters$filter_gender)
     if (!is.null(filters$filter_veteran)) updateCheckboxGroupInput(session, "filter_veteran", selected = filters$filter_veteran)
     if (!is.null(filters$filter_income)) updateCheckboxGroupInput(session, "filter_income", selected = filters$filter_income)

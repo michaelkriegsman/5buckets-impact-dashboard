@@ -279,7 +279,10 @@ overview_pm_parse_date <- function(x) {
 }
 
 #' Bin workshop dates for Gantt-style heatmap (complete grid, ASCII series labels)
-build_program_manager_timeline <- function(pm, time_unit, sort_by) {
+#' @param row_grain `"group"` = one row per organization + group (default);
+#'   `"org"` = one row per organization (groups collapsed; workshop counts sum).
+build_program_manager_timeline <- function(pm, time_unit, sort_by, row_grain = c("group", "org")) {
+  row_grain <- match.arg(row_grain)
   if (is.null(pm) || nrow(pm) == 0) {
     return(list(df = NULL, msg = "No Program Manager rows loaded."))
   }
@@ -296,8 +299,12 @@ build_program_manager_timeline <- function(pm, time_unit, sort_by) {
   grp <- if (!is.na(grp_c)) overview_sanitize_pm_label(pm[[grp_c]]) else rep("", nrow(pm))
   org <- trimws(as.character(org))
   grp <- trimws(as.character(grp))
-  series <- ifelse(nzchar(grp), paste(org, "-", grp), org)
-  series <- trimws(gsub("\\s*-\\s*", " - ", series))
+  if (identical(row_grain, "org")) {
+    series <- org
+  } else {
+    series <- ifelse(nzchar(grp), paste(org, "-", grp), org)
+    series <- trimws(gsub("\\s*-\\s*", " - ", series))
+  }
 
   d <- overview_pm_parse_date(pm[[date_c]])
   ok <- !is.na(d)
@@ -307,6 +314,7 @@ build_program_manager_timeline <- function(pm, time_unit, sort_by) {
 
   d_ok <- d[ok]
   series_ok <- series[ok]
+  org_ok <- org[ok]
   sid <- if (!is.na(sid_c)) trimws(as.character(pm[[sid_c]])) else as.character(seq_len(nrow(pm)))
   sid_ok <- sid[ok]
 
@@ -323,17 +331,23 @@ build_program_manager_timeline <- function(pm, time_unit, sort_by) {
     dplyr::group_by(series, period) %>%
     dplyr::summarise(n = dplyr::n(), .groups = "drop")
 
-  summ <- data.frame(series = series_ok, d = d_ok, stringsAsFactors = FALSE) %>%
-    dplyr::mutate(series = ifelse(nzchar(as.character(series)), series, "(no org)")) %>%
+  summ <- data.frame(
+    series = series_ok,
+    org_key = org_ok,
+    d = d_ok,
+    stringsAsFactors = FALSE
+  ) %>%
+    dplyr::mutate(
+      series = ifelse(nzchar(as.character(series)), series, "(no org)"),
+      org_key = ifelse(nzchar(as.character(org_key)), org_key, series)
+    ) %>%
     dplyr::group_by(series) %>%
-    dplyr::summarise(first = min(d), last = max(d), .groups = "drop")
-
-  # Org key = text before first " - " (series label is org " - " group)
-  summ$org_key <- vapply(as.character(summ$series), function(s) {
-    p <- strsplit(s, " - ", fixed = TRUE)[[1]]
-    if (length(p) >= 2) trimws(p[1]) else trimws(s)
-  }, character(1))
-
+    dplyr::summarise(
+      first = min(d),
+      last = max(d),
+      org_key = dplyr::first(org_key),
+      .groups = "drop"
+    )
   ord <- switch(
     sort_by,
     first_asc = summ$series[order(summ$first, summ$series)],

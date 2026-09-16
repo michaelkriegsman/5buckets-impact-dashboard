@@ -42,8 +42,20 @@ PRE_INDEX_FILL_RGBA <- "rgba(0, 118, 190, 0.15)"
 POST_INDEX_COLOR <- "#c9a227"
 POST_INDEX_LINE_COLOR <- "#8a6d12"  # darker gold so the smoothed curve reads over translucent bars
 POST_INDEX_FILL_RGBA <- "rgba(201, 162, 39, 0.15)"
+# Annual index: brand leafy green (distinct from Pre blue / Post gold, still on brand palette)
+ANNUAL_INDEX_COLOR <- "#82c341"
+ANNUAL_INDEX_LINE_COLOR <- "#4e7a22"
+ANNUAL_INDEX_FILL_RGBA <- "rgba(130, 195, 65, 0.18)"
 # Within-subjects mean connector: dark goldenrod (distinct from Post line gold)
 MEAN_SLOPE_COLOR <- "#a67c00"
+
+# Shared scale blurb for Pre / Post / Annual financial wellness summary scores
+LIKERT_INDEX_SCALE_BLURB <- paste0(
+  "Each item uses a 4-point agreement scale with no neutral option, converted to numbers: ",
+  "Strongly Disagree = -3, Disagree = -1, Agree = +1, Strongly Agree = +3. ",
+  "The index is the mean of those item scores, so it also runs from -3 to +3. ",
+  "0 is neutral; higher means more positive financial wellness (Pre) or greater perceived improvement (Post / Annual)."
+)
 
 # --- Impact Story / Learning: Feb 2026 column resolution + multicolor wordclouds ---
 .resolve_col <- function(df, exact, grep_pattern = NULL) {
@@ -512,13 +524,30 @@ SESSION_SATISFACTION_MAX <- 6L
 }
 
 # Expand comma-separated metadata (refined: each comma-separated segment is one distinct label as stored)
+# Coerce googlesheets4 list-columns to atomic character / numeric (Satisfaction crash fix).
+.coerce_atomic_chr <- function(v) {
+  if (is.null(v)) return(character(0))
+  if (is.list(v)) {
+    return(vapply(seq_along(v), function(i) {
+      x <- v[[i]]
+      if (is.null(x) || length(x) == 0) return(NA_character_)
+      if (is.list(x)) x <- unlist(x, recursive = TRUE, use.names = FALSE)
+      trimws(paste(as.character(x), collapse = ", "))
+    }, character(1)))
+  }
+  trimws(as.character(v))
+}
+.coerce_numeric_vec <- function(v) {
+  suppressWarnings(as.numeric(.coerce_atomic_chr(v)))
+}
+
 .satisfaction_expand_rows <- function(df, sat_col, split_col) {
   if (is.null(df) || nrow(df) == 0) return(data.frame(key = character(0), satisfaction = numeric(0)))
   if (!sat_col %in% colnames(df) || !split_col %in% colnames(df)) {
     return(data.frame(key = character(0), satisfaction = numeric(0)))
   }
-  sat <- as.numeric(df[[sat_col]])
-  sp <- df[[split_col]]
+  sat <- .coerce_numeric_vec(df[[sat_col]])
+  sp <- .coerce_atomic_chr(df[[split_col]])
   out <- list()
   for (i in seq_len(nrow(df))) {
     if (!is.finite(sat[i])) next
@@ -609,8 +638,8 @@ MODULE_FILTER_ORDER <- c("Mindset", "Manage", "Borrow", "Grow", "Protect")
   if (!sat_col %in% colnames(df) || !split_col %in% colnames(df)) {
     return(data.frame(key = character(0), satisfaction = numeric(0)))
   }
-  sat <- as.numeric(df[[sat_col]])
-  sp <- df[[split_col]]
+  sat <- .coerce_numeric_vec(df[[sat_col]])
+  sp <- .coerce_atomic_chr(df[[split_col]])
   out <- list()
   for (i in seq_len(nrow(df))) {
     if (!is.finite(sat[i])) next
@@ -650,8 +679,8 @@ MODULE_FILTER_ORDER <- c("Mindset", "Manage", "Borrow", "Grow", "Protect")
   if (!sat_col %in% colnames(df) || !split_col %in% colnames(df)) {
     return(data.frame(key = character(0), satisfaction = numeric(0)))
   }
-  sat <- as.numeric(df[[sat_col]])
-  sp <- df[[split_col]]
+  sat <- .coerce_numeric_vec(df[[sat_col]])
+  sp <- .coerce_atomic_chr(df[[split_col]])
   out <- list()
   split_atoms <- function(s) {
     s <- trimws(as.character(s))
@@ -689,8 +718,8 @@ MODULE_FILTER_ORDER <- c("Mindset", "Manage", "Borrow", "Grow", "Protect")
   if (!sat_col %in% colnames(df) || !split_col %in% colnames(df)) {
     return(data.frame(key = character(0), satisfaction = numeric(0)))
   }
-  sat <- as.numeric(df[[sat_col]])
-  sp <- df[[split_col]]
+  sat <- .coerce_numeric_vec(df[[sat_col]])
+  sp <- .coerce_atomic_chr(df[[split_col]])
   out <- list()
   for (i in seq_len(nrow(df))) {
     if (!is.finite(sat[i])) next
@@ -977,10 +1006,30 @@ RACE_LEVELS_CANONICAL <- c(
 )
 # Preset responses (everything except the catch-all "Other")
 RACE_PRESET_RESPONSES <- setdiff(RACE_LEVELS_CANONICAL, "Other")
+# The Annual form and the Big Pre/Post forms punctuate the same categories differently
+# ("e.g.," vs "e.g.", "Alaska native" vs "Alaska Native"), so preset matching compares on a
+# case- and punctuation-insensitive key rather than the raw string. Without this, Annual
+# answers land in "Other".
+.race_match_key <- function(x) {
+  k <- tolower(trimws(as.character(x)))
+  k <- gsub("[.,;]", "", k)
+  gsub("[[:space:]]+", " ", k)
+}
+RACE_KEY_TO_CANONICAL <- setNames(RACE_PRESET_RESPONSES, .race_match_key(RACE_PRESET_RESPONSES))
+# Label variants across form generations that must resolve to one category. Big Pre still uses
+# the shorter Central Asian wording while Big Post added "Afghan"; both are real answers.
+RACE_KEY_ALIASES <- c("Central Asian (e.g., Nepali, Kazakh, etc.)")
+names(RACE_KEY_ALIASES) <- .race_match_key("Central Asian (e.g., Afghan, Nepali, Kazakh, etc.)")
+RACE_KEY_TO_CANONICAL <- c(RACE_KEY_TO_CANONICAL, RACE_KEY_ALIASES)
 # Render the Variable Mapping (Yes/No coverage) table with color-coded cells so
 # "Yes" stands out (green) and "No" recedes (muted gray).
 .style_variable_mapping_table <- function(mapping) {
-  yn_cols <- setdiff(colnames(mapping), "Variable")
+  yn_cols <- setdiff(colnames(mapping), c("Variable", "Notes", "Note"))
+  # Only style columns that look like Yes/No coverage (avoid coloring long note text)
+  yn_cols <- yn_cols[vapply(yn_cols, function(nm) {
+    vals <- unique(as.character(mapping[[nm]]))
+    all(vals %in% c("Yes", "No", NA, ""))
+  }, logical(1))]
   display_names <- gsub("_", " ", colnames(mapping))  # "Big_Pre" -> "Big Pre" in headers
   DT::datatable(
     mapping,
@@ -1006,9 +1055,45 @@ INCOME_ORDER <- c(
 )
 # Short labels for income x-axis (full text remains in hover)
 INCOME_SHORT_LABELS <- setNames(
-  c("<$52k", "$52k–$87k", "$87k–$139k", ">$139k"),
+  c("<$52k", "$52k-$87k", "$87k-$139k", ">$139k"),
   INCOME_ORDER
 )
+
+# Fixed Gender Identity options as shown on current forms (plus bare "Other").
+GENDER_FORM_OPTIONS <- c(
+  "Female",
+  "Male",
+  "Non-binary / Gender non-conforming",
+  "Prefer to self-describe",
+  "Other"
+)
+
+#' Gender labels for Reach charts.
+#' - Known form options: case/spacing consensus only (male -> Male).
+#' - Write-ins (e.g. "Gay"): default bucket as "Other"; if expand_others=TRUE keep each raw string.
+.gender_for_reach_chart <- function(x, expand_others = FALSE) {
+  if (is.null(x)) return(x)
+  v <- trimws(as.character(x))
+  v[v %in% c("", NA_character_)] <- NA_character_
+  out <- rep(NA_character_, length(v))
+  v_low <- tolower(v)
+  out[!is.na(v_low) & v_low == "female"] <- "Female"
+  out[!is.na(v_low) & v_low == "male"] <- "Male"
+  out[!is.na(v_low) & grepl("non-?binary|gender non-?conform", v_low)] <-
+    "Non-binary / Gender non-conforming"
+  out[!is.na(v_low) & grepl("prefer to self-describe", v_low)] <- "Prefer to self-describe"
+  out[!is.na(v_low) & v_low == "other"] <- "Other"
+  still <- is.na(out) & !is.na(v)
+  if (isTRUE(expand_others)) {
+    out[still] <- v[still]
+  } else {
+    out[still] <- "Other"
+  }
+  out
+}
+
+# Back-compat alias (same as expand_others = FALSE)
+.normalize_gender_for_dashboard <- function(x) .gender_for_reach_chart(x, expand_others = FALSE)
 # Canonical education order (low → high). Used for filters, Reach, Learning heatmaps, Pre/Post dist plots.
 # Raw sheet labels are mapped here via .normalize_education_for_dashboard() so "Middle school" and
 # legacy text align to one ordering everywhere.
@@ -1105,7 +1190,7 @@ sidebar_card <- function(title, ...) {
   list(text = "Significantly below the midpoint.", color = "#b54b3a")
 }
 
-# Normalize sidebar filter inputs. With shinymanager, inputs can be NA before login;
+# Normalize single-choice sidebar filters (language, etc.). With shinymanager, inputs can be NA before login;
 # using them in `if (x != "All")` without this guard triggers "missing value where TRUE/FALSE needed".
 .sidebar_filter_choice <- function(x, default = "All") {
   x <- tryCatch(x, error = function(e) NULL)
@@ -1113,7 +1198,117 @@ sidebar_card <- function(title, ...) {
   if (length(x) == 1L && is.na(x)) return(default)
   x <- trimws(as.character(x))
   if (length(x) == 1L && !nzchar(x)) return(default)
-  x
+  x[[1]]
+}
+
+# Multi-select org/group: empty / NULL / "All" → character(0) meaning no restriction.
+.sidebar_filter_values <- function(x) {
+  x <- tryCatch(x, error = function(e) NULL)
+  if (is.null(x) || length(x) == 0L) return(character(0))
+  x <- trimws(as.character(x))
+  x <- x[!is.na(x) & nzchar(x) & !identical(x, "All") & x != "All"]
+  unique(x)
+}
+
+.sidebar_filter_active <- function(x) {
+  length(.sidebar_filter_values(x)) > 0L
+}
+
+# Composite org+group keys in the Group multi-select (nested under org optgroups).
+.ORG_GROUP_SEP <- "|||"
+.org_group_key <- function(org, group) {
+  paste0(trimws(as.character(org)), .ORG_GROUP_SEP, trimws(as.character(group)))
+}
+.org_group_parse_keys <- function(keys) {
+  keys <- .sidebar_filter_values(keys)
+  if (!length(keys)) {
+    return(data.frame(org = character(0), group = character(0), key = character(0),
+                      stringsAsFactors = FALSE))
+  }
+  parts <- strsplit(keys, .ORG_GROUP_SEP, fixed = TRUE)
+  orgs <- vapply(parts, function(p) if (length(p) >= 1) p[[1]] else NA_character_, character(1))
+  grps <- vapply(parts, function(p) {
+    if (length(p) >= 2) paste(p[-1], collapse = .ORG_GROUP_SEP) else NA_character_
+  }, character(1))
+  ok <- !is.na(orgs) & !is.na(grps) & nzchar(orgs) & nzchar(grps)
+  data.frame(org = orgs[ok], group = grps[ok], key = keys[ok], stringsAsFactors = FALSE)
+}
+
+# Row keep-mask: orgs are an include set; group keys are org-scoped.
+# - no orgs selected → keep all
+# - orgs selected, no group keys → keep all rows in those orgs
+# - orgs + group keys → whole org if that org has no picked groups; else only picked groups
+.rows_match_org_group_scope <- function(org_vec, group_vec, selected_orgs, selected_group_keys) {
+  n <- length(org_vec)
+  if (!n) return(logical(0))
+  selected_orgs <- .sidebar_filter_values(selected_orgs)
+  if (!length(selected_orgs)) return(rep(TRUE, n))
+  org_chr <- trimws(as.character(org_vec))
+  grp_chr <- trimws(as.character(group_vec))
+  keep <- !is.na(org_chr) & org_chr %in% selected_orgs
+  parsed <- .org_group_parse_keys(selected_group_keys)
+  if (!nrow(parsed)) return(keep)
+  restricted <- unique(parsed$org)
+  key_set <- parsed$key
+  row_keys <- .org_group_key(org_chr, grp_chr)
+  needs_group <- keep & org_chr %in% restricted
+  keep[needs_group] <- row_keys[needs_group] %in% key_set
+  keep
+}
+
+.apply_org_group_scope <- function(data, selected_orgs, selected_group_keys,
+                                   org_col = "org_name", group_col = "group") {
+  if (is.null(data) || nrow(data) == 0) return(data)
+  if (!org_col %in% colnames(data)) return(data)
+  gvec <- if (group_col %in% colnames(data)) data[[group_col]] else rep(NA_character_, nrow(data))
+  keep <- .rows_match_org_group_scope(data[[org_col]], gvec, selected_orgs, selected_group_keys)
+  data[keep, , drop = FALSE]
+}
+
+# Build selectize optgroup choices: list(Org = c(GroupLabel = "Org|||Group", ...), ...)
+.build_group_optgroup_choices <- function(pre_data, post_data, selected_orgs) {
+  selected_orgs <- .sidebar_filter_values(selected_orgs)
+  if (!length(selected_orgs)) return(list())
+  pairs <- list()
+  add_pairs <- function(df) {
+    if (is.null(df) || nrow(df) == 0) return()
+    if (!all(c("org_name", "group") %in% colnames(df))) return()
+    o <- trimws(as.character(df$org_name))
+    g <- trimws(as.character(df$group))
+    ok <- !is.na(o) & nzchar(o) & !is.na(g) & nzchar(g) & o %in% selected_orgs
+    if (!any(ok)) return()
+    pairs[[length(pairs) + 1L]] <<- data.frame(org = o[ok], group = g[ok], stringsAsFactors = FALSE)
+  }
+  add_pairs(pre_data)
+  add_pairs(post_data)
+  if (!length(pairs)) return(list())
+  all_pairs <- unique(do.call(rbind, pairs))
+  all_pairs <- all_pairs[order(all_pairs$org, all_pairs$group), , drop = FALSE]
+  by_org <- split(all_pairs, all_pairs$org)
+  lapply(by_org, function(df) {
+    setNames(.org_group_key(df$org, df$group), df$group)
+  })
+}
+
+# Format multi-select for scope text / favorites display.
+.sidebar_filter_label <- function(vals, singular = "organization", plural = "organizations") {
+  vals <- .sidebar_filter_values(vals)
+  if (!length(vals)) return(NULL)
+  if (length(vals) == 1L) return(paste0(singular, " \u201C", vals[[1]], "\u201D"))
+  if (length(vals) <= 3L) {
+    return(paste0(plural, " ", paste0("\u201C", vals, "\u201D", collapse = ", ")))
+  }
+  paste0(length(vals), " ", plural)
+}
+
+.sidebar_group_scope_label <- function(group_keys, selected_orgs) {
+  parsed <- .org_group_parse_keys(group_keys)
+  selected_orgs <- .sidebar_filter_values(selected_orgs)
+  if (!nrow(parsed)) return(NULL)
+  bits <- vapply(seq_len(nrow(parsed)), function(i) {
+    paste0("\u201C", parsed$group[[i]], "\u201D in ", parsed$org[[i]])
+  }, character(1))
+  if (length(bits) <= 3L) paste(bits, collapse = "; ") else paste0(length(bits), " org-groups")
 }
 
 # TRUE when a selectInput has a real user choice (not NULL / NA / blank).
@@ -1125,14 +1320,16 @@ sidebar_card <- function(title, ...) {
 # Sidebar-aware scope sentence: states whether a box reflects the full population
 # or a filtered subset. `input` is the server's reactive input object.
 scope_sentence <- function(input) {
-  org  <- .sidebar_filter_choice(tryCatch(input$selected_org, error = function(e) NULL))
-  grp  <- .sidebar_filter_choice(tryCatch(input$selected_group, error = function(e) NULL))
+  orgs <- .sidebar_filter_values(tryCatch(input$selected_org, error = function(e) NULL))
+  grps <- .sidebar_filter_values(tryCatch(input$selected_group, error = function(e) NULL))
   lang <- .sidebar_filter_choice(tryCatch(input$filter_language, error = function(e) NULL), default = "All")
   use_date <- tryCatch(isTRUE(input$use_date_filter), error = function(e) FALSE)
   dr   <- tryCatch(input$date_range, error = function(e) NULL)
   parts <- character(0)
-  if (!is.null(org) && length(org) == 1 && nzchar(org) && org != "All") parts <- c(parts, paste0("organization \u201C", org, "\u201D"))
-  if (!is.null(grp) && length(grp) == 1 && nzchar(grp) && grp != "All") parts <- c(parts, paste0("group \u201C", grp, "\u201D"))
+  org_lab <- .sidebar_filter_label(orgs, "organization", "organizations")
+  grp_lab <- .sidebar_group_scope_label(grps, orgs)
+  if (!is.null(org_lab)) parts <- c(parts, org_lab)
+  if (!is.null(grp_lab)) parts <- c(parts, grp_lab)
   if (!is.null(lang) && length(lang) == 1 && nzchar(lang) && lang != "All") parts <- c(parts, paste0(lang, " responses"))
   if (use_date && !is.null(dr) && length(dr) >= 2) parts <- c(parts, paste0(format(as.Date(dr[1])), " to ", format(as.Date(dr[2]))))
   if (!length(parts)) return("These results reflect all 5 Buckets workshops (no filters applied).")
@@ -1207,8 +1404,11 @@ deterministic_summary_box <- function(scores = NULL, pre = NULL, post = NULL,
 
 ui <- fluidPage(
   
-  # Custom CSS with 5 Buckets brand colors
+  # Boot loading covers menus/content only (header is rendered first and stays above the overlay).
   tags$head(
+    tags$script(HTML("
+      document.documentElement.classList.add('dash-boot-loading');
+    ")),
     tags$script(src = "favorites.js"),
     tags$script(src = "favorites_shiny.js"),
     tags$link(rel = "preconnect", href = "https://fonts.googleapis.com"),
@@ -1242,6 +1442,19 @@ ui <- fluidPage(
       .well {
         background-color: #f8f9fa;
         border: 1px solid #dee2e6;
+      }
+      /* Overview Response Descriptives: emphasize Session Total + Total columns */
+      #impact_overview_survey_type_stats_table table th:nth-child(6),
+      #impact_overview_survey_type_stats_table table td:nth-child(6),
+      #impact_overview_survey_type_stats_table table th:nth-child(8),
+      #impact_overview_survey_type_stats_table table td:nth-child(8) {
+        background-color: #efe8f7 !important;
+        font-weight: 600;
+      }
+      #impact_overview_survey_type_stats_table table thead th:nth-child(6),
+      #impact_overview_survey_type_stats_table table thead th:nth-child(8) {
+        background-color: #4a2673 !important;
+        color: #ffffff !important;
       }
       /* Tabs styled as sleek pill buttons (works for both .nav-tabs and pill tabsets) */
       .nav-tabs, .nav-pills {
@@ -1310,8 +1523,10 @@ ui <- fluidPage(
       }
       body > .container-fluid > .app-header { flex: 0 0 auto; }
       body > .container-fluid > #dashboard_loading_overlay { flex: 0 0 auto; }
-      /* Title banner: logo + Impact Dashboard title */
+      /* Title banner: logo + Impact Dashboard title (always above loading overlay) */
       .app-header {
+        position: relative;
+        z-index: 13000;
         display: flex;
         align-items: center;
         gap: 26px;
@@ -1338,6 +1553,23 @@ ui <- fluidPage(
         font-size: 15px;
         margin-top: 4px;
         letter-spacing: 0.01em;
+      }
+      .filter-label-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 10px 0 6px 0;
+      }
+      .selectize-dropdown .optgroup-header {
+        font-weight: 700;
+        color: #5c2f92;
+        font-size: 12px;
+        padding: 8px 10px 4px 10px;
+        background: #f7f4fb;
+        border-bottom: 1px solid #e3dcef;
+      }
+      .selectize-dropdown .optgroup .option {
+        padding-left: 18px;
       }
       /* The sidebarLayout row fills the remaining height below the title */
       body > .container-fluid > .row {
@@ -1426,14 +1658,24 @@ ui <- fluidPage(
       }
       details details > summary { background: #fcfbfe; padding: 9px 13px; }
       details details > summary:hover { background: #f5f1fb; }
+      /* During boot: keep title/logo visible; hide only sidebar + main until data is ready */
+      html.dash-boot-loading .sidebarPanel,
+      html.dash-boot-loading .mainPanel {
+        visibility: hidden !important;
+      }
+      html.dash-boot-loading #boot_loading_overlay,
+      html.dash-boot-loading #dashboard_loading_overlay > .dashboard-loading-overlay {
+        visibility: visible !important;
+      }
       .dashboard-loading-overlay {
         position: fixed;
-        top: 100px; /* below title, above nav tabs */
+        /* Sit below the title banner (logo ~84px + padding/margins) */
+        top: 118px;
         left: 0;
         right: 0;
         bottom: 0;
-        background: rgba(240, 242, 245, 0.96);
-        z-index: 12000; /* above all tables/plots */
+        background: rgba(240, 242, 245, 0.98);
+        z-index: 12000; /* above sidebar, tabs, tables, plots; below .app-header */
         display: flex;
         align-items: center;
         justify-content: center;
@@ -1555,30 +1797,32 @@ ui <- fluidPage(
         display: inline-block;
         max-width: 100%;
         border: 1px solid #e3dcef;
-        border-radius: 10px;
+        border-radius: 8px;
         overflow: hidden;
-        box-shadow: 0 1px 5px rgba(92, 47, 146, 0.06);
+        box-shadow: 0 1px 4px rgba(92, 47, 146, 0.05);
       }
       table.dataTable.vm-coverage {
         width: auto !important;
         margin: 0 !important;
         border: none !important;
         border-collapse: collapse;
-        font-size: 13px;
+        font-size: 11px;
+        line-height: 1.25;
       }
       table.dataTable.vm-coverage thead th {
         background: #5c2f92;
         color: #ffffff;
         font-weight: 600;
         border: none !important;
-        padding: 11px 16px;
+        padding: 5px 8px;
         white-space: nowrap;
+        font-size: 11px;
       }
       table.dataTable.vm-coverage thead th:not(:first-child) { text-align: center; }
       table.dataTable.vm-coverage tbody td {
         border-top: 1px solid #efeaf6 !important;
         border-bottom: none !important;
-        padding: 9px 16px;
+        padding: 4px 8px;
         vertical-align: middle;
       }
       table.dataTable.vm-coverage tbody tr:first-child td { border-top: none !important; }
@@ -1586,6 +1830,25 @@ ui <- fluidPage(
       /* Remove DT's default zebra/hover so the Yes/No color coding stays clean */
       table.dataTable.vm-coverage.row-border tbody tr { background-color: transparent; }
       .dataTables_wrapper:has(table.vm-coverage) .dataTables_scrollBody { border: none; }
+
+      /* Compact Overview pair-source / similar DT tables */
+      table.dataTable.pair-source-compact {
+        font-size: 11px !important;
+        line-height: 1.25;
+      }
+      table.dataTable.pair-source-compact thead th,
+      table.dataTable.pair-source-compact tbody td {
+        padding: 4px 8px !important;
+      }
+      .dataTables_wrapper:has(table.pair-source-compact) .dataTables_filter input {
+        font-size: 11px;
+        height: 26px;
+        padding: 2px 6px;
+      }
+      .dataTables_wrapper:has(table.pair-source-compact) .dataTables_info,
+      .dataTables_wrapper:has(table.pair-source-compact) .dataTables_paginate {
+        font-size: 11px;
+      }
 
       /* Bound certain plots to about half the main panel width (prevents over-wide charts) */
       .plot-half { width: 52%; min-width: 440px; max-width: 720px; margin-bottom: 10px; }
@@ -1680,6 +1943,17 @@ ui <- fluidPage(
           el.removeAttribute('open');
         });
       });
+      if (window.Shiny) {
+        Shiny.addCustomMessageHandler('dashBootDone', function() {
+          document.documentElement.classList.remove('dash-boot-loading');
+        });
+      } else {
+        document.addEventListener('shiny:connected', function() {
+          Shiny.addCustomMessageHandler('dashBootDone', function() {
+            document.documentElement.classList.remove('dash-boot-loading');
+          });
+        }, { once: true });
+      }
     "))
   ),
   
@@ -1692,6 +1966,18 @@ ui <- fluidPage(
       div(class = "app-header-subtitle", "Interactive Analyses of Survey Data")
     )
   ),
+  # Covers sidebar + main only (CSS top offset + header z-index keep logo/title visible).
+  div(
+    id = "boot_loading_overlay",
+    class = "dashboard-loading-overlay",
+    div(
+      class = "dashboard-loading-card",
+      div(class = "dashboard-loading-spinner"),
+      h4("Loading data dashboard...", style = "color: #5c2f92; margin: 0 0 8px 0;"),
+      p("Pulling data from the Master Workbook. Please wait.",
+        style = "color: #5f6369; margin: 0; font-size: 13px;")
+    )
+  ),
   uiOutput("dashboard_loading_overlay"),
   
   sidebarLayout(
@@ -1701,20 +1987,7 @@ ui <- fluidPage(
       id = "dashboard_sidebar",
       width = 3,
       class = "sidebar",
-      # 1) View mode
-      sidebar_card("View mode",
-        radioButtons(
-          "tab_mode",
-          label = NULL,
-        choices = c(
-          "Impact-centric" = "impact",
-          "Survey-centric" = "survey"
-        ),
-          selected = "impact"
-        )
-      ),
-
-      # 2) Display options (global; applies to every tab's charts)
+      # Display options (global; applies to every tab's charts)
       display_options_card(
         checkboxInput("opt_same_y", "Paired Y axes", value = TRUE),
         checkboxInput("opt_show_n", "Show N on bars", value = FALSE),
@@ -1734,19 +2007,31 @@ ui <- fluidPage(
           )
         ),
         h5("Organization"),
-        selectInput(
+        selectizeInput(
           "selected_org",
           label = NULL,
-          choices = c("All Organizations" = "All"),
-          selected = "All"
+          choices = NULL,
+          selected = NULL,
+          multiple = TRUE,
+          options = list(
+            placeholder = "All organizations",
+            plugins = list("remove_button")
+          )
         ),
-        h5("Group"),
-        selectInput(
+        helpText(style = "font-size: 11px; color: #6a6f75;", "Leave empty for all. Select one or more orgs."),
+        div(class = "filter-label-row", h5("Group", style = "margin: 0;")),
+        selectizeInput(
           "selected_group",
           label = NULL,
-          choices = c("All Groups" = "All"),
-          selected = "All"
+          choices = NULL,
+          selected = NULL,
+          multiple = TRUE,
+          options = list(
+            placeholder = "Select organizations first",
+            plugins = list("remove_button")
+          )
         ),
+        helpText(style = "font-size: 11px; color: #6a6f75;", "Grouped under each selected organization."),
         h5("Survey language"),
         selectInput(
           "filter_language",
@@ -1771,23 +2056,20 @@ ui <- fluidPage(
         helpText(style = "font-size: 11px; color: #6a6f75;", "Options come from Program Manager (Workshops). Select one or more; a session is kept if it teaches any selected module.")
       ),
 
-      # Actions
-      partner_report_sidebar_ui(),
+      # Export (PDF / AI Markdown / data mapping / filtered CSV ZIP)
+      export_sidebar_ui(),
       br(),
       actionButton("refresh_data", "Refresh Data",
                    class = "btn-primary",
                    style = "width: 100%;")
     ),
     
-    # Main Panel - Conditional tab sets (View mode is in sidebar)
+    # Main Panel
     mainPanel(
       width = 9,
-      # Impact-centric tabs (ordered by importance: foundation -> outcomes -> experience)
-      conditionalPanel(
-        "input.tab_mode == 'impact'",
-        tabsetPanel(
-          id = "impact_tabs",
-          type = "pills",
+      tabsetPanel(
+        id = "impact_tabs",
+        type = "pills",
           tabPanel("Overview", value = "overview",
             h3("Impact Overview"),
             p("High-level reach, satisfaction, and participation highlights."),
@@ -1799,24 +2081,44 @@ ui <- fluidPage(
                 open = TRUE,
                 style = "margin-left: 18px;",
                 tags$summary(h5("Response Descriptives", style = "color: #5c2f92; cursor: pointer;")),
-                div(style = "width: fit-content; max-width: 460px;", tableOutput("impact_overview_summary_stats_table")),
-                p(style = "font-size: 13px; color: #5f6369; margin-top: 10px; max-width: 580px;",
-                  tags$em("Note."), " Counts reflect the current sidebar filters. ",
-                  "Sessions do not sum across Pre and Post \u2014 a single session can contribute both a pre and a post, ",
-                  "so Total sessions \u2265 either column. Responses do sum (Total = Pre + Post). ",
-                  "Average responses per session = responses \u00f7 sessions."),
-                h6("By survey type (Big / Little)", style = "color: #5c2f92; margin-top: 16px; margin-bottom: 6px;"),
-                div(style = "width: fit-content; max-width: 720px;", tableOutput("impact_overview_survey_type_stats_table")),
-                p(style = "font-size: 12px; color: #5f6369; margin-top: 8px; max-width: 720px;",
+                h6("By survey type", style = "color: #5c2f92; margin-top: 8px; margin-bottom: 6px;"),
+                div(style = "width: fit-content; max-width: 980px;", tableOutput("impact_overview_survey_type_stats_table")),
+                p(style = "font-size: 12px; color: #5f6369; margin-top: 8px; max-width: 980px;",
                   tags$em("Note."), " Big = first/last session in a series (or single-session workshops). ",
-                  "Little = mid-series sessions. Response Total = Big Pre + Little Pre + Little Post + Big Post. ",
-                  "Session totals are distinct ", tags$code("session_id"), "s and do not sum across columns.")
+                  "Little = mid-series sessions. ",
+                  tags$strong("Session Total"), " responses = Big Pre + Little Pre + Little Post + Big Post. ",
+                  tags$strong("Total"), " responses = Session Total + Annual Survey ",
+                  "(Sessions and averages are blank in Total because Annual is not a workshop session). ",
+                  "Session counts are distinct workshops (", tags$code("base_session_id"),
+                  ") and do not sum across Big/Little columns; Annual has no ", tags$code("session_id"), ".")
               ),
               tags$details(
                 open = FALSE,
                 style = "margin-left: 18px;",
                 tags$summary(h5("Respondent IDs", style = "color: #5c2f92; cursor: pointer;")),
-                htmlOutput("respondent_pairing_banner_overview")
+                htmlOutput("respondent_pairing_banner_overview"),
+                uiOutput("respondent_pair_sources_blurb"),
+                tags$details(
+                  open = TRUE,
+                  style = "margin-left: 12px;",
+                  tags$summary(h6("Pair sources by organization", style = "color: #5c2f92; cursor: pointer;")),
+                  DT::dataTableOutput("respondent_pair_sources_by_org")
+                ),
+                tags$details(
+                  open = TRUE,
+                  style = "margin-left: 12px;",
+                  tags$summary(h6("Pair sources by organization + group", style = "color: #5c2f92; cursor: pointer;")),
+                  DT::dataTableOutput("respondent_pair_sources_by_group")
+                ),
+                tags$details(
+                  open = FALSE,
+                  style = "margin-left: 12px;",
+                  tags$summary(h6("Sessions that contain paired IDs", style = "color: #5c2f92; cursor: pointer;")),
+                  p(style = "font-size: 11px; color: #5f6369;",
+                    "Each row is a Big Pre or Big Post session that includes at least one of the paired IDs. ",
+                    "Compare Responses / Distinct IDs to Paired IDs in session."),
+                  DT::dataTableOutput("respondent_pair_sources_by_session")
+                )
               ),
               tags$details(
                 open = FALSE,
@@ -1826,10 +2128,11 @@ ui <- fluidPage(
                   style = "font-size: 12px; color: #5f6369; margin-bottom: 8px;",
                   "Pre and Post counts (left axis) use ",
                   tags$strong("current sidebar filters"),
-                  " (org, group, date, language, demographics). Workshops (right axis) = distinct ",
+                  " and include ", tags$strong("all"), " Pre / Post responses (Big + Little), not Big-only. Workshops (right axis) = distinct ",
                   tags$code("session_id"),
                   " in that time bin. Choose day, week, or month bins."
                 ),
+              div(style = "padding-left: 12px;",
               fluidRow(
                 column(4, selectInput(
                   "overview_master_time_unit",
@@ -1837,10 +2140,11 @@ ui <- fluidPage(
                   choices = c("Days" = "days", "Weeks (Mon start)" = "weeks", "Months" = "months"),
                   selected = "weeks"
                 )),
-                column(4, checkboxInput("overview_submissions_show_responses", "Responses (Pre + Post)", value = TRUE)),
+                column(4, checkboxInput("overview_submissions_show_responses", "Responses (all Pre + all Post)", value = TRUE)),
                 column(4, checkboxInput("overview_submissions_show_workshops", "Workshops", value = TRUE))
-              ),
-                plotlyOutput("overview_master_weekly_line", height = "340px")
+              )),
+                uiOutput("overview_master_weekly_filter_note"),
+                plotlyOutput("overview_master_weekly_line", height = "420px")
               ),
               tags$details(
                 open = FALSE,
@@ -1848,18 +2152,20 @@ ui <- fluidPage(
                 tags$summary(h5("Workshop series timeline", style = "color: #5c2f92; cursor: pointer;")),
                 p(
                   style = "font-size: 12px; color: #5f6369; margin-bottom: 8px;",
-                  "Each row is one series (organization + group). Tiles show when at least one workshop is scheduled in that time bin. Data: ",
+                  "Tiles show when at least one workshop is scheduled in that time bin. Default: one row per group within an organization. Check the box below to collapse to one row per organization. Data: ",
                   tags$a("Program Manager - Workshops tab", href = PROGRAM_MANAGER_URL, target = "_blank"),
-                  ". (Not filtered by sidebar\u2014shows the full schedule.)"
+                  ". Date window follows the sidebar ", tags$strong("Filter by date range"),
+                  " when enabled; otherwise the full PM schedule is shown. Org/group sidebar filters are not applied here."
                 ),
+              div(style = "padding-left: 12px;",
               fluidRow(
-                column(4, selectInput(
+                column(6, selectInput(
                   "overview_pm_time_unit",
                   "Time axis",
                   choices = c("Days" = "days", "Weeks (Mon start)" = "weeks", "Months" = "months"),
                   selected = "weeks"
                 )),
-                column(4, selectInput(
+                column(6, selectInput(
                   "overview_pm_sort",
                   "Order rows by",
                   choices = c(
@@ -1872,12 +2178,13 @@ ui <- fluidPage(
                   selected = "first_asc"
                 ))
               ),
-              fluidRow(
-                column(6, dateInput("overview_pm_range_start", "Visible from", value = Sys.Date() - 90)),
-                column(6, dateInput("overview_pm_range_end", "Visible to", value = Sys.Date() + 30))
-              ),
-                p(style = "font-size: 11px; color: #5f6369;", "Zoom the Gantt horizontally; pan in the chart to scroll through time."),
-                plotlyOutput("overview_program_manager_gantt", height = "420px")
+              checkboxInput(
+                "overview_pm_rows_by_org",
+                "Group rows by organization (collapse groups within org)",
+                value = FALSE
+              )),
+                p(style = "font-size: 11px; color: #5f6369; padding-left: 12px;", "Zoom the Gantt horizontally; pan in the chart to scroll through time."),
+                uiOutput("overview_program_manager_gantt_ui")
               )
             ),
             tags$details(
@@ -1911,7 +2218,7 @@ ui <- fluidPage(
             ),
             br(),
             p(style = "font-size: 11px; color: #5f6369;",
-              "Use filters in the sidebar. Switch to Survey-centric for detailed workshop tables and survey breakdowns.")
+              "Use filters in the sidebar to refine all Impact views.")
           ),
           tabPanel("Data quality", value = "data_quality",
             h3("Master sheet read health"),
@@ -1960,48 +2267,44 @@ ui <- fluidPage(
             )
           ),
           tabPanel("Reach", value = "reach2",
-            h3("Reach & Demographics (simplified)"),
-            p(style = "color: #5f6369; font-size: 12px; margin-bottom: 16px;",
-              "Pre (left) vs Post (right) from Big Pre / Big Post. Same sidebar filters apply."),
+            h3("Reach & Demographics"),
+            p(style = "color: #5f6369; font-size: 12px; margin-bottom: 8px;",
+              "Big Pre (left) vs Big Post (middle). Optionally include Annual Survey (right). Same sidebar filters apply where columns exist. ",
+              "Click a demographic bar to list respondents for that category and wave."),
+            checkboxInput(
+              "include_annual_in_reach",
+              "Include Annual Survey in demographic charts",
+              value = FALSE
+            ),
             tags$details(
               open = FALSE,
               tags$summary(h4("Variable Mapping", style = "color: #5c2f92; cursor: pointer;")),
               DT::dataTableOutput("reach2_variable_mapping"),
               p(style = "font-size: 11px; color: #5f6369; margin-top: 8px;",
-                "Big Pre & Big Post include full demographics. Little Pre/Post include Zip Code only.")
+                "Big Pre, Big Post, and Annual include the full demographic block. Little Pre/Post include Zip Code only.")
             ),
             tags$details(
               open = TRUE,
               tags$summary(h4("Demographic Distributions", style = "color: #5c2f92; cursor: pointer;")),
               p(style = "color: #5f6369; font-size: 12px; margin-bottom: 15px;",
-                "Pre (left) vs Post (right). X-axes show all factor levels for direct comparison."),
+                "X-axes share levels for direct comparison. Use the checkbox above to add an Annual column."),
               p(style = "color: #5f6369; font-size: 11px; margin: 4px 0 12px 0;",
                 "Percent = share of respondents in that chart after filters (each bar\u2019s count / sum of counts on the plot)."),
               h5("Age", style = "color: #5c2f92; margin-top: 12px;"),
-              fluidRow(
-                column(6, plotlyOutput("reach2_age_pre", height = "280px")),
-                column(6, plotlyOutput("reach2_age_post", height = "280px"))
-              ),
+              uiOutput("reach2_age_row"),
               h5("Gender", style = "color: #5c2f92; margin-top: 12px;"),
-              fluidRow(
-                column(6, plotlyOutput("reach2_gender_pre", height = "280px")),
-                column(6, plotlyOutput("reach2_gender_post", height = "280px"))
+              checkboxInput(
+                "reach2_gender_display_others",
+                "Display other responses separately (default: bucket write-ins as Other)",
+                value = FALSE
               ),
+              uiOutput("reach2_gender_row"),
               h5("Household Income", style = "color: #5c2f92; margin-top: 12px;"),
-              fluidRow(
-                column(6, plotlyOutput("reach2_income_pre", height = "280px")),
-                column(6, plotlyOutput("reach2_income_post", height = "280px"))
-              ),
+              uiOutput("reach2_income_row"),
               h5("Education", style = "color: #5c2f92; margin-top: 12px;"),
-              fluidRow(
-                column(6, plotlyOutput("reach2_education_pre", height = "380px")),
-                column(6, plotlyOutput("reach2_education_post", height = "380px"))
-              ),
+              uiOutput("reach2_education_row"),
               h5("Race/Ethnicity", style = "color: #5c2f92; margin-top: 12px;"),
-              fluidRow(
-                column(6, plotlyOutput("reach2_race_pre", height = "460px")),
-                column(6, plotlyOutput("reach2_race_post", height = "460px"))
-              )
+              uiOutput("reach2_race_row")
             ),
             tags$details(
               open = FALSE,
@@ -2051,9 +2354,8 @@ ui <- fluidPage(
                 style = "margin-left: 18px;",
                 tags$summary(h5("Summary Score \u2014 Financial Wellness Index", style = "color: #5c2f92; cursor: pointer;")),
                 p(style = "color: #5f6369; font-size: 12px; margin-bottom: 12px;",
-                  "Financial Wellness Index = mean of the 8 Big Pre items. Each item is scored on the 4-point agreement scale: ",
-                  tags$strong("Strongly Disagree = \u22123, Disagree = \u22121, Agree = +1, Strongly Agree = +3"),
-                  " (no neutral). The index is continuous over \u22123 to +3; the histogram bins it (adjust the number of bins) and the smoothed curve shows the underlying shape. 0 = neutral; higher = more positive financial wellness."),
+                  "Financial Wellness Index = mean of the 8 Big Pre items. ", LIKERT_INDEX_SCALE_BLURB,
+                  " The histogram bins the continuous index (adjust Bins) and the smoothed curve shows the underlying shape."),
                 div(class = "plot-half",
                   display_options_card(
                     checkboxInput("wellness_index_pre_bars", "Bars", value = TRUE),
@@ -2062,7 +2364,8 @@ ui <- fluidPage(
                     inline = TRUE
                   ),
                   div(style = "min-height: 300px;",
-                    plotlyOutput("impact_wellness_hist", height = "300px"))
+                    plotlyOutput("impact_wellness_hist", height = "300px")),
+                  uiOutput("impact_wellness_hist_summary")
                 )
               ),
               tags$details(
@@ -2095,9 +2398,9 @@ ui <- fluidPage(
                 style = "margin-left: 18px;",
                 tags$summary(h5("Summary Score \u2014 Post Impact Index", style = "color: #5c2f92; cursor: pointer;")),
                 p(style = "color: #5f6369; font-size: 12px; margin-bottom: 12px;",
-                  "Post Impact Index = mean of the 9 Big Post \u201cCompared to before\u2026\u201d items (Understanding; Awareness of amount/afford/where; Optimism; Relationship; Stress; Confidence; Comfort with professionals). Each item is scored on the 4-point agreement scale: ",
-                  tags$strong("Strongly Disagree = \u22123, Disagree = \u22121, Agree = +1, Strongly Agree = +3"),
-                  " (no neutral). The index is continuous over \u22123 to +3; the histogram bins it (adjust the number of bins) and the smoothed curve shows the underlying shape. 0 = neutral; higher = greater perceived improvement."),
+                  "Post Impact Index = mean of the 9 Big Post Compared-to-before items (Understanding; Awareness of amount/afford/where; Optimism; Relationship; Stress; Confidence; Comfort with professionals). ",
+                  LIKERT_INDEX_SCALE_BLURB,
+                  " The histogram bins the continuous index (adjust Bins) and the smoothed curve shows the underlying shape."),
                 div(class = "plot-half",
                   display_options_card(
                     checkboxInput("wellness_index_post_bars", "Bars", value = TRUE),
@@ -2106,7 +2409,8 @@ ui <- fluidPage(
                     inline = TRUE
                   ),
                   div(style = "min-height: 300px;",
-                    plotlyOutput("impact_post_hist", height = "300px"))
+                    plotlyOutput("impact_post_hist", height = "300px")),
+                  uiOutput("impact_post_hist_summary")
                 )
               ),
               tags$details(
@@ -2202,6 +2506,44 @@ ui <- fluidPage(
                 plotlyOutput("impact_wellness_item_within_plot", height = "380px"),
                 DT::dataTableOutput("impact_wellness_item_within_table")
               )
+            ),
+            tags$details(
+              open = FALSE,
+              tags$summary(h4("Annual Survey", style = "color: #5c2f92; cursor: pointer;")),
+              p(style = "font-size: 12px; color: #5f6369; margin: 8px 0 12px 0; background: #f8f4fc; padding: 10px; border-radius: 6px;",
+                "Follow-up ", tags$em("Compared to before your 5 Buckets experience..."),
+                " financial wellness items from the Annual Survey (same structure as Post). Pre and Post above stay workshop-only."),
+              tags$details(
+                open = TRUE,
+                style = "margin-left: 12px;",
+                tags$summary(h5("Summary Score \u2014 Annual Financial Wellness Index", style = "color: #5c2f92; cursor: pointer;")),
+                p(style = "color: #5f6369; font-size: 12px; margin-bottom: 10px;",
+                  "Annual Financial Wellness Index = mean of Annual Compared-to-before items (same structure as Post). ",
+                  LIKERT_INDEX_SCALE_BLURB,
+                  " The histogram bins the continuous index (adjust Bins) and the smoothed curve shows the underlying shape."),
+                div(class = "plot-half",
+                  display_options_card(
+                    checkboxInput("wellness_index_annual_bars", "Bars", value = TRUE),
+                    checkboxInput("wellness_index_annual_curves", "Curves", value = TRUE),
+                    numericInput("wellness_index_annual_bins", "Bins", value = 24, min = 4, max = 60, step = 1),
+                    inline = TRUE
+                  ),
+                  div(style = "min-height: 300px;",
+                    plotlyOutput("impact_tab_annual_wellness_index_hist", height = "300px")),
+                  uiOutput("impact_tab_annual_wellness_index_summary")
+                )
+              ),
+              tags$details(
+                open = TRUE,
+                style = "margin-left: 12px;",
+                tags$summary(h5("Each Financial Wellness Metric", style = "color: #5c2f92; cursor: pointer;")),
+                p(style = "color: #5f6369; font-size: 12px; margin-bottom: 8px;",
+                  "Per-item Likert bars (sidebar Show N / Show %). Stacked overview below."),
+                uiOutput("impact_tab_annual_wellness_item_hists"),
+                br(),
+                h6("Stacked overview", style = "color: #5c2f92; margin-top: 8px;"),
+                plotlyOutput("impact_tab_annual_wellness_likert_plot", height = "480px")
+              )
             )
           ),
           tabPanel("Behavioral Readiness", value = "behavioral",
@@ -2237,7 +2579,8 @@ ui <- fluidPage(
                     checkboxInput("behavioral_index_pre_curves", "Curves", value = TRUE)
                   ),
                   div(style = "min-height: 300px;",
-                    plotlyOutput("impact_behavioral_pre_hist", height = "300px"))
+                    plotlyOutput("impact_behavioral_pre_hist", height = "300px")),
+                  uiOutput("impact_behavioral_pre_hist_summary")
                 )
               ),
               tags$details(
@@ -2264,7 +2607,8 @@ ui <- fluidPage(
                     checkboxInput("behavioral_index_post_curves", "Curves", value = TRUE)
                   ),
                   div(style = "min-height: 300px;",
-                    plotlyOutput("impact_behavioral_post_hist", height = "300px"))
+                    plotlyOutput("impact_behavioral_post_hist", height = "300px")),
+                  uiOutput("impact_behavioral_post_hist_summary")
                 )
               ),
               tags$details(
@@ -2334,6 +2678,30 @@ ui <- fluidPage(
                 "Mean change (added − removed) for each behavior among paired respondents, sorted by effect."),
               plotlyOutput("impact_behavioral_item_within_plot", height = "380px"),
               DT::dataTableOutput("impact_behavioral_item_within_table")
+            ),
+            tags$details(
+              open = FALSE,
+              tags$summary(h4("Annual Survey", style = "color: #5c2f92; cursor: pointer;")),
+              p(style = "font-size: 12px; color: #5f6369; margin: 8px 0 12px 0; background: #f8f4fc; padding: 10px; border-radius: 6px;",
+                "Annual follow-up: ", tags$em("As a result of my workshop(s)..."),
+                " actions taken or planned. Pre and Post sections above are unchanged."),
+              tags$details(
+                open = TRUE,
+                style = "margin-left: 12px;",
+                tags$summary(h5("Summary Score — Annual Behavior Index", style = "color: #5c2f92; cursor: pointer;")),
+                p(style = "color: #5f6369; font-size: 12px; margin-bottom: 10px;",
+                  "Count of selected actions per respondent on the Annual multi-select (higher = more actions taken/planned)."),
+                plotlyOutput("impact_tab_annual_behaviors_index_hist", height = "300px"),
+                htmlOutput("impact_tab_annual_behaviors_index_summary")
+              ),
+              tags$details(
+                open = TRUE,
+                style = "margin-left: 12px;",
+                tags$summary(h5("Each action taken / planned", style = "color: #5c2f92; cursor: pointer;")),
+                p(style = "color: #5f6369; font-size: 12px; margin-bottom: 8px;",
+                  "Share selecting each option. Sidebar Show N / Show % apply."),
+                plotlyOutput("impact_tab_annual_behaviors_plot", height = "420px")
+              )
             )
           ),
           tabPanel("Satisfaction", value = "satisfaction",
@@ -2436,6 +2804,16 @@ ui <- fluidPage(
                     DT::dataTableOutput("satisfaction_facilitator_reliability_table"))
                 )
               )
+            ),
+            tags$details(
+              open = FALSE,
+              tags$summary(h4("Annual Survey", style = "color: #5c2f92; cursor: pointer;")),
+              p(style = "font-size: 12px; color: #5f6369; margin: 8px 0 12px 0; background: #f8f4fc; padding: 10px; border-radius: 6px;",
+                "Annual recommend (0–10) mirrors Big Post likelihood-to-recommend. ",
+                tags$strong("Session satisfaction is Post-only"), " and is not asked on the Annual form."),
+              h5("Likelihood to recommend 5 Buckets (Annual)", style = "color: #5c2f92;"),
+              plotlyOutput("impact_tab_annual_recommend_hist", height = "320px"),
+              uiOutput("impact_tab_annual_recommend_summary")
             )
           ),
           tabPanel("Learning & Impact Stories", value = "learning_stories",
@@ -2447,8 +2825,16 @@ ui <- fluidPage(
                 tags$li(tags$strong("Big Post:"), " “Better understanding” Likert (compared to before your 5 Buckets experience)."),
                 tags$li(tags$strong("Big Pre:"), " Today’s intention, curiosities, hoped feelings, additional comments."),
                 tags$li(tags$strong("Big Post:"), " Daily reflection (insight, application, helpful), additional comments, and overall program impact story."),
-                tags$li(tags$strong("Word clouds"), " use pre/post open text; low-information replies (e.g. “nope”, “n/a”) are filtered; short substantive answers are kept.")
+                tags$li(tags$strong("Annual Survey:"), " Takeaways, proud goals, impact stories, keep-in-touch / learn-more topics."),
+                tags$li(tags$strong("Word clouds"), " use Pre/Post/Annual open text; low-information replies (e.g. “nope”, “n/a”) are filtered; short substantive answers are kept.")
               )
+            ),
+            tags$details(
+              open = FALSE,
+              tags$summary(h4("Variable Mapping", style = "color: #5c2f92; cursor: pointer;")),
+              p(style = "font-size: 12px; color: #5f6369; margin-bottom: 10px;",
+                "Which of the five survey types feed each Learning & Impact Stories block."),
+              DT::dataTableOutput("impact_learning_variable_mapping")
             ),
             tags$details(
               open = TRUE,
@@ -2502,21 +2888,11 @@ ui <- fluidPage(
               fluidRow(
                 column(6, plotlyOutput("learning_keep_in_touch_by_income", height = "420px")),
                 column(6, plotlyOutput("learning_keep_in_touch_by_education", height = "420px"))
-              ),
-              tags$details(
-                open = FALSE,
-                tags$summary(h5("Variable mapping", style = "color: #5c2f92; cursor: pointer;")),
-                DT::dataTableOutput("impact_learning_variable_mapping"),
-                p(style = "font-size: 11px; color: #5f6369; margin-top: 8px;",
-                  "Feb 2026 open-text columns: ",
-                  tags$code("data/question_mapping.R"), " — ",
-                  tags$code("PRE_OPENING_COLS"), ", ", tags$code("PRE_ADDITIONAL_COMMENTS_COL"), ", ",
-                  tags$code("POST_TODAY_SESSION_COLS"), ", ", tags$code("POST_IMPACT_STORY_COL"), ".")
               )
             ),
-              tags$details(
-                open = TRUE,
-                tags$summary(h4("Wordcloud stories", style = "color: #5c2f92; cursor: pointer;")),
+            tags$details(
+              open = TRUE,
+              tags$summary(h4("Wordcloud stories", style = "color: #5c2f92; cursor: pointer;")),
               div(class = "wc-controls",
                 sliderInput("wc_max_words", "Words per cloud",
                   min = 15, max = 120, value = 60, step = 5, width = "320px"),
@@ -2681,603 +3057,21 @@ ui <- fluidPage(
               div(style = "min-height: 240px; padding-bottom: 80px; width: 100%;")
             )
           ),
+          tabPanel(
+            "Annual Survey",
+            value = "annual_survey",
+            annual_survey_tab_ui()
+          ),
+          tabPanel(
+            "User Journey",
+            value = "user_journey",
+            user_journey_tab_ui()
+          ),
           tabPanel("Favorites", value = "favorites_impact",
             favorites_tab_ui()
           )
         )
-      ),
-      # Survey-centric tabs
-      conditionalPanel(
-        "input.tab_mode == 'survey'",
-        tabsetPanel(
-          id = "survey_tabs",
-          type = "pills",
-        tabPanel(
-          "Workshop Summary", value = "survey_workshop_summary",
-          h3("Workshop Summary"),
-          p("High-level metrics aggregated by workshop session."),
-          tags$details(
-            open = FALSE,
-            tags$summary(h5("Individual respondent lookup", style = "color: #5c2f92; cursor: pointer;")),
-            p(style = "font-size: 12px; color: #5f6369;",
-              "Search ", tags$code("respondent_id"), " (partial match). Shows Big Pre/Post rows in current sidebar filters."),
-            textInput("respondent_lookup_id", label = NULL, placeholder = "e.g. email hash prefix or respondent_id"),
-            DT::dataTableOutput("respondent_lookup_table")
-          ),
-          br(),
-          
-          # Summary Statistics
-          h4("Summary Statistics", style = "color: #5c2f92; margin-top: 20px;"),
-          htmlOutput("session_summary_stats"),
-          br(),
-          
-          # By Organization Section
-          h4("By Organization", style = "color: #5c2f92; margin-top: 20px;"),
-          p("Explore series (multi-session learners and single-session types) organized by partner. Series counts align with the series length (e.g. 1/1 for single sessions).", 
-            style = "color: #5f6369; margin-top: 0px;"),
-          DT::dataTableOutput("organization_summary_table"),
-          br(),
-          
-          # Filtered Summary Stats
-          h5("Summary Stats (Linked to Session Details Table)", style = "color: #5c2f92; margin-top: 20px;"),
-          tableOutput("filtered_summary_stats_table"),
-          br(), br(),
-          hr(),
-          
-          # Session Details
-          h4("Session Details", style = "color: #5c2f92; margin-top: 20px;"),
-          DT::dataTableOutput("session_summary_table"),
-          br(),
-          
-          # Session Timeline (placeholder for future)
-          # h4("Session Timeline", style = "color: #5c2f92; margin-top: 20px;"),
-          # plotlyOutput("session_timeline", height = "400px"),
-          
-          br(), br(),
-          hr(),
-          h5("Data Sources", style = "color: #797d82; margin-top: 30px;"),
-          p("Access the source Google Sheets:"),
-          tags$ul(
-            tags$li(tags$a(href = "https://docs.google.com/spreadsheets/d/1nxVENReSAURQlXLdJ2eMcaLZ4NWYA4xNo7eTwp6EHWw/edit", 
-                          target = "_blank", "Master Workbook (Pre/Post)", style = "color: #5c2f92;")),
-            tags$li(tags$a(href = "https://docs.google.com/spreadsheets/d/1aefJFVQtfYx2UCd5u9q1pl0raJXVzXaW8pKlzZRMXuQ/edit", 
-                          target = "_blank", "Program Manager", style = "color: #5c2f92;"))
-          )
-        ),
-        
-        # Tab 2: Big Pre
-        tabPanel(
-          "Big Pre", value = "survey_big_pre",
-          h3("Big Pre-Survey Analysis"),
-          p("Analysis of big pre-survey responses across multiple sessions. Filter by organization or group."),
-          br(),
-          
-          # Variable Mapping Summary (Collapsible)
-          tags$details(
-            tags$summary(h4("Variable Mapping", style = "color: #5c2f92; margin-top: 20px; cursor: pointer;")),
-            htmlOutput("big_pre_variable_mapping_table"),
-            style = "margin-bottom: 20px;"
-          ),
-          br(),
-          
-          # Summary Statistics
-          h4("Response Summary", style = "color: #5c2f92; margin-top: 20px;"),
-          htmlOutput("big_pre_summary_stats"),
-          br(),
-          
-          # Financial Wellness Section (Combined with Self-Efficacy)
-          tags$details(
-            tags$summary(h4("Financial Wellness", style = "color: #5c2f92; margin-top: 20px; cursor: pointer;")),
-            h5("Wellness & Outlook Variables", style = "color: #5c2f92; margin-top: 15px;"),
-            fluidRow(
-              column(4, plotlyOutput("big_pre_optimism_hist", height = "300px")),
-              column(4, plotlyOutput("big_pre_relationship_hist", height = "300px")),
-              column(4, plotlyOutput("big_pre_stress_hist", height = "300px"))
-            ),
-            br(),
-            h5("Self-Efficacy Variables", style = "color: #5c2f92; margin-top: 15px;"),
-            fluidRow(
-              column(6, plotlyOutput("big_pre_confidence_hist", height = "300px")),
-              column(6, plotlyOutput("big_pre_comfort_hist", height = "300px"))
-            ),
-            br(),
-            h5("Financial Wellness Index (8 Questions)", style = "color: #5c2f92; margin-top: 15px;"),
-            p(style = "color: #5f6369; font-size: 12px; margin-top: 0; margin-bottom: 10px;",
-              "Average of 8 agreement items (4-point, scored −3 to +3): awareness of money, affordability, where it goes; optimism; relationship with money; stress management; planning confidence; comfort with professionals. 0 = neutral; higher = more positive financial wellness."),
-            fluidRow(
-              column(12, plotlyOutput("big_pre_wellness_index_hist", height = "300px"))
-            ),
-            br(),
-            h5("Wellness Radar Chart", style = "color: #5c2f92; margin-top: 15px;"),
-            fluidRow(
-              column(12, plotlyOutput("big_pre_wellness_radar", height = "400px"))
-            )
-          ),
-          br(),
-          
-          # Financial Behaviors Section
-          tags$details(
-            tags$summary(h4("Financial Behaviors", style = "color: #5c2f92; margin-top: 20px; cursor: pointer;")),
-            h5("Individual Behaviors", style = "color: #5c2f92; margin-top: 15px;"),
-            fluidRow(
-              column(12, plotlyOutput("big_pre_behaviors_heatmap_survey", height = "500px"))
-            ),
-            br(),
-            h5("Behavioral Index", style = "color: #5c2f92; margin-top: 15px;"),
-            p(style = "color: #5f6369; font-size: 12px; margin-top: 0; margin-bottom: 10px;",
-              "Count of past behaviors each respondent reported doing before the workshop. Based on the question \"Before today's workshop, I have done the following:\" — each \"Yes\" checked is summed (scale 0–8)."),
-            fluidRow(
-              column(12, plotlyOutput("big_pre_behavioral_index_hist", height = "300px"))
-            ),
-            br(),
-            h5("Behavior Categories", style = "color: #5c2f92; margin-top: 15px;"),
-            fluidRow(
-              column(6, plotlyOutput("big_pre_action_behaviors", height = "300px")),
-              column(6, plotlyOutput("big_pre_awareness_social_behaviors", height = "300px"))
-            )
-          ),
-          br(),
-          
-          # Demographics Section
-          tags$details(
-            tags$summary(h4("Demographics", style = "color: #5c2f92; margin-top: 20px; cursor: pointer;")),
-            p(style = "color: #797d82; font-style: italic; margin-top: 10px;",
-              "*Consider if to make demographics its own tab"),
-            fluidRow(
-              column(6, plotlyOutput("big_pre_age_dist", height = "300px")),
-              column(6, plotlyOutput("big_pre_gender_dist", height = "300px"))
-            ),
-            br(),
-            fluidRow(
-              column(6, plotlyOutput("big_pre_income_dist", height = "300px")),
-              column(6, plotlyOutput("big_pre_education_dist", height = "300px"))
-            ),
-            br(),
-            fluidRow(
-              column(12, plotlyOutput("big_pre_race_ethnicity_dist", height = "400px"))
-            )
-          ),
-          br(),
-          
-          # Workshop Intentions Section
-          tags$details(
-            tags$summary(h4("Workshop Intentions & Engagement", style = "color: #5c2f92; margin-top: 20px; cursor: pointer;")),
-            h5("1. Workshop Intentions", style = "color: #5c2f92; margin-top: 15px;"),
-            p("What is one intention you have for today's workshop?"),
-            p(style = "color: #5f6369; font-size: 11px; margin-top: 0;",
-              "Open-ended. Sentiment: lexicon-based score per response. Word cloud: top terms after removing stopwords."),
-            fluidRow(
-              column(6, uiOutput("big_pre_intentions_wordcloud")),
-              column(6, htmlOutput("big_pre_intentions_sentiment"))
-            ),
-            br(),
-            h5("2. Questions & Curiosities", style = "color: #5c2f92; margin-top: 15px;"),
-            p("If you are arriving with any questions or curiosities, please share!"),
-            p(style = "color: #5f6369; font-size: 11px; margin-top: 0;",
-              "Open-ended. Sentiment: lexicon-based score. Word cloud: top terms after removing stopwords."),
-            fluidRow(
-              column(6, uiOutput("big_pre_curiosities_wordcloud")),
-              column(6, htmlOutput("big_pre_curiosities_sentiment"))
-            ),
-            br(),
-            h5("3. Hoped Feelings", style = "color: #5c2f92; margin-top: 15px;"),
-            p("How do you hope to feel at the end of today's workshop?"),
-            p(style = "color: #5f6369; font-size: 11px; margin-top: 0;",
-              "Open-ended. Sentiment: lexicon-based score. Word cloud: top terms after removing stopwords."),
-            fluidRow(
-              column(6, uiOutput("big_pre_hopes_wordcloud")),
-              column(6, htmlOutput("big_pre_hopes_sentiment"))
-            ),
-            br(),
-            h5("4. Additional Comments", style = "color: #5c2f92; margin-top: 15px;"),
-            p("Anything else you'd like to share with our team?"),
-            p(style = "color: #5f6369; font-size: 11px; margin-top: 0;",
-              "Open-ended. Sentiment: lexicon-based score. Word cloud: top terms after removing stopwords."),
-            fluidRow(
-              column(6, uiOutput("big_pre_comments_wordcloud")),
-              column(6, htmlOutput("big_pre_comments_sentiment"))
-            )
-          )
-        ),
-        
-        # Tab 3: Big Post
-        tabPanel(
-          "Big Post", value = "survey_big_post",
-          h3("Big Post-Survey Analysis"),
-          p("Analysis of big post-survey responses across multiple sessions. Filter by organization or group."),
-          br(),
-          
-          # Variable Mapping Summary (Collapsible)
-          tags$details(
-            tags$summary(h4("Variable Mapping", style = "color: #5c2f92; margin-top: 20px; cursor: pointer;")),
-            h5("Metadata (All Surveys)", style = "color: #5c2f92; margin-top: 15px;"),
-            DT::dataTableOutput("big_post_variable_mapping_metadata_dt"),
-            br(),
-            h5("Little Post + Big Post (Common Questions)", style = "color: #5c2f92; margin-top: 15px;"),
-            DT::dataTableOutput("big_post_variable_mapping_common_dt"),
-            br(),
-            h5("Big Post Only", style = "color: #5c2f92; margin-top: 15px;"),
-            DT::dataTableOutput("big_post_variable_mapping_bigpost_dt"),
-            style = "margin-bottom: 20px;"
-          ),
-          br(),
-          
-          # Summary Statistics
-          h4("Response Summary", style = "color: #5c2f92; margin-top: 20px;"),
-          htmlOutput("big_post_summary_stats"),
-          br(),
-          
-          # Workshop Quality & Experience Section
-          tags$details(
-            tags$summary(h4("Workshop Quality & Experience", style = "color: #5c2f92; margin-top: 20px; cursor: pointer;")),
-            h5("Satisfaction Ratings", style = "color: #5c2f92; margin-top: 15px;"),
-            fluidRow(
-              column(4, plotlyOutput("big_post_recommendation_hist_survey", height = "300px")),
-              column(4, plotlyOutput("big_post_experience_satisfaction_hist", height = "300px")),
-              column(4, plotlyOutput("big_post_facilitator_satisfaction_hist", height = "300px"))
-            ),
-            br(),
-            h5("Facilitator Ratings", style = "color: #5c2f92; margin-top: 15px;"),
-            fluidRow(
-              column(6, plotlyOutput("big_post_facilitator_knowledgeable_hist", height = "300px")),
-              column(6, plotlyOutput("big_post_facilitator_interactive_hist", height = "300px"))
-            ),
-            br(),
-            fluidRow(
-              column(6, plotlyOutput("big_post_facilitator_relatable_hist", height = "300px")),
-              column(6, plotlyOutput("big_post_facilitator_engaging_hist", height = "300px"))
-            ),
-            br(),
-            h5("Workshop Quality Index", style = "color: #5c2f92; margin-top: 15px;"),
-            p("Average of: Experience Satisfaction and Facilitator Satisfaction ratings (1-5 scale)", 
-              style = "color: #5f6369; font-size: 12px; margin-bottom: 10px;"),
-            fluidRow(
-              column(12, plotlyOutput("big_post_quality_index_hist_survey", height = "300px"))
-            )
-          ),
-          br(),
-          
-          # Workshop Impact - Financial Wellness Section
-          tags$details(
-            tags$summary(h4("Workshop Impact - Financial Wellness", style = "color: #5c2f92; margin-top: 20px; cursor: pointer;")),
-            h5("Impact Variables", style = "color: #5c2f92; margin-top: 15px;"),
-            fluidRow(
-              column(6, plotlyOutput("big_post_impact_understanding_hist_survey", height = "300px")),
-              column(6, plotlyOutput("big_post_impact_optimism_hist", height = "300px"))
-            ),
-            br(),
-            fluidRow(
-              column(6, plotlyOutput("big_post_impact_relationship_hist", height = "300px")),
-              column(6, plotlyOutput("big_post_impact_stress_hist", height = "300px"))
-            ),
-            br(),
-            fluidRow(
-              column(6, plotlyOutput("big_post_impact_confidence_hist", height = "300px")),
-              column(6, plotlyOutput("big_post_impact_comfort_hist", height = "300px"))
-            ),
-            br(),
-            h5("Post-Workshop Impact Index (6 Questions)", style = "color: #5c2f92; margin-top: 15px;"),
-            fluidRow(
-              column(12, plotlyOutput("big_post_impact_index_hist", height = "300px"))
-            ),
-            br(),
-            h5("Impact Radar Chart", style = "color: #5c2f92; margin-top: 15px;"),
-            fluidRow(
-              column(12, plotlyOutput("big_post_impact_radar", height = "400px"))
-            )
-          ),
-          br(),
-          
-          # Planned Actions Section
-          tags$details(
-            tags$summary(h4("Planned Actions", style = "color: #5c2f92; margin-top: 20px; cursor: pointer;")),
-            h5("Individual Planned Actions", style = "color: #5c2f92; margin-top: 15px;"),
-            fluidRow(
-              column(12, plotlyOutput("big_post_planned_actions_heatmap_survey", height = "500px"))
-            ),
-            br(),
-            h5("Planned Actions Index", style = "color: #5c2f92; margin-top: 15px;"),
-            fluidRow(
-              column(12, plotlyOutput("big_post_planned_actions_index_hist", height = "300px"))
-            ),
-            br(),
-            h5("Action Categories", style = "color: #5c2f92; margin-top: 15px;"),
-            fluidRow(
-              column(6, plotlyOutput("big_post_action_oriented_planned", height = "500px")),
-              column(6, plotlyOutput("big_post_awareness_social_planned", height = "500px"))
-            )
-          ),
-          br(),
-          
-          # Demographics Section
-          tags$details(
-            tags$summary(h4("Demographics", style = "color: #5c2f92; margin-top: 20px; cursor: pointer;")),
-            p(style = "color: #797d82; font-style: italic; margin-top: 10px;",
-              "*Consider if to make demographics its own tab"),
-            fluidRow(
-              column(6, plotlyOutput("big_post_age_dist", height = "300px")),
-              column(6, plotlyOutput("big_post_gender_dist", height = "300px"))
-            ),
-            br(),
-            fluidRow(
-              column(6, plotlyOutput("big_post_income_dist", height = "300px")),
-              column(6, plotlyOutput("big_post_education_dist", height = "300px"))
-            ),
-            br(),
-            fluidRow(
-              column(12, plotlyOutput("big_post_race_ethnicity_dist", height = "400px"))
-            )
-          ),
-          br(),
-          
-          # Workshop Learning & Feedback Section
-          tags$details(
-            tags$summary(h4("Workshop Learning & Feedback", style = "color: #5c2f92; margin-top: 20px; cursor: pointer;")),
-            h5("1. Notable Learnings", style = "color: #5c2f92; margin-top: 15px;"),
-            p("What were the most notable or interesting things you learned today?"),
-            fluidRow(
-              column(6, uiOutput("big_post_learnings_wordcloud_survey")),
-              column(6, htmlOutput("big_post_learnings_sentiment_survey"))
-            ),
-            br(),
-            h5("2. Planned Financial Changes", style = "color: #5c2f92; margin-top: 15px;"),
-            p("What is one thing you might change about your finances after this workshop? (if anything)"),
-            fluidRow(
-              column(6, uiOutput("big_post_changes_wordcloud_survey")),
-              column(6, htmlOutput("big_post_changes_sentiment"))
-            ),
-            br(),
-            h5("3. Personal Impact Story", style = "color: #5c2f92; margin-top: 15px;"),
-            p("How has participating in this workshop helped or impacted you? Your story inspires others!"),
-            fluidRow(
-              column(6, uiOutput("big_post_impact_story_wordcloud_survey")),
-              column(6, htmlOutput("big_post_impact_story_sentiment_survey"))
-            ),
-            br(),
-            h5("4. Future Topics of Interest", style = "color: #5c2f92; margin-top: 15px;"),
-            p("What personal finance topic(s) would you like to learn more about from 5 Buckets?"),
-            fluidRow(
-              column(6, uiOutput("big_post_future_topics_wordcloud")),
-              column(6, htmlOutput("big_post_future_topics_sentiment"))
-            ),
-            br(),
-            h5("5. Additional Comments", style = "color: #5c2f92; margin-top: 15px;"),
-            p("Anything else you would like to share with our team?"),
-            fluidRow(
-              column(6, uiOutput("big_post_comments_wordcloud")),
-              column(6, htmlOutput("big_post_comments_sentiment"))
-            )
-          )
-        ),
-        
-        # Tab 4: Big Pre-Post Pairs
-        tabPanel(
-          "Big Pre-Post Pairs", value = "survey_big_pairs",
-          h3("Big Pre-Post Comparison Analysis"),
-          p("Compare overlapping questions between Big Pre and Big Post surveys. Filter by organization or group."),
-          br(),
-          
-          # Financial Wellness Comparisons
-          tags$details(
-            tags$summary(h4("Financial Wellness Comparisons", style = "color: #5c2f92; margin-top: 20px; cursor: pointer;")),
-            p("Compare baseline (Pre) vs change (Post) for 5 financial wellness dimensions.", 
-              style = "color: #5f6369; font-size: 12px; margin-bottom: 10px;"),
-            checkboxInput("pairs_show_bell_curves", "Show smoothed bell curves", value = FALSE),
-            h5("Individual Question Comparisons", style = "color: #5c2f92; margin-top: 15px;"),
-            fluidRow(
-              column(6, plotlyOutput("pairs_optimism_comparison", height = "300px")),
-              column(6, plotlyOutput("pairs_relationship_comparison", height = "300px"))
-            ),
-            br(),
-            fluidRow(
-              column(6, plotlyOutput("pairs_stress_comparison", height = "300px")),
-              column(6, plotlyOutput("pairs_confidence_comparison", height = "300px"))
-            ),
-            br(),
-            fluidRow(
-              column(6, plotlyOutput("pairs_comfort_comparison", height = "300px")),
-              column(6, plotlyOutput("pairs_wellness_index_comparison", height = "300px"))
-            ),
-            br(),
-            h5("Wellness Radar Chart Comparison", style = "color: #5c2f92; margin-top: 15px;"),
-            fluidRow(
-              column(12, plotlyOutput("pairs_wellness_radar_comparison", height = "400px"))
-            ),
-            br(),
-            h5("Wellness Summary: Pre Baseline vs Post Change", style = "color: #5c2f92; margin-top: 15px;"),
-            p("Average scores (4-point agreement scale, −3 to +3) with change indicators. Stress is reverse-scored so higher = less stress.", 
-              style = "color: #5f6369; font-size: 12px; margin-bottom: 10px;"),
-            fluidRow(
-              column(12, plotlyOutput("pairs_wellness_summary_comparison", height = "500px"))
-            )
-          ),
-          br(),
-          
-          # Behavioral Comparisons
-          tags$details(
-            tags$summary(h4("Financial Behaviors Comparison", style = "color: #5c2f92; margin-top: 20px; cursor: pointer;")),
-            p("Compare past behaviors (Pre) vs planned actions (Post) for 8 financial behaviors.", 
-              style = "color: #5f6369; font-size: 12px; margin-bottom: 10px;"),
-            h5("Action Categories: Pre Baseline vs Post Change", style = "color: #5c2f92; margin-top: 15px;"),
-            fluidRow(
-              column(12, plotlyOutput("pairs_behaviors_comparison", height = "500px"))
-            ),
-            br(),
-            h5("Behavioral Index Comparison", style = "color: #5c2f92; margin-top: 15px;"),
-            fluidRow(
-              column(12, plotlyOutput("pairs_behavioral_index_comparison", height = "400px"))
-            )
-          ),
-          br(),
-          
-          # Summary Indices Comparison
-          tags$details(
-            tags$summary(h4("Summary Indices Comparison", style = "color: #5c2f92; margin-top: 20px; cursor: pointer;")),
-            h5("Financial Wellness Index", style = "color: #5c2f92; margin-top: 15px;"),
-            fluidRow(
-              column(6, plotlyOutput("pairs_wellness_index_scatter", height = "400px")),
-              column(6, plotlyOutput("pairs_wellness_index_change", height = "400px"))
-            ),
-            br(),
-            h5("Behavioral Index", style = "color: #5c2f92; margin-top: 15px;"),
-            fluidRow(
-              column(6, plotlyOutput("pairs_behavioral_index_scatter", height = "400px")),
-              column(6, plotlyOutput("pairs_behavioral_index_change", height = "400px"))
-            )
-          ),
-          br(),
-          
-          # Sentiment vs Satisfaction
-          tags$details(
-            tags$summary(h4("Sentiment vs Satisfaction", style = "color: #5c2f92; margin-top: 20px; cursor: pointer;")),
-            p("Compare pre-workshop sentiment (intentions) vs post-workshop satisfaction.", 
-              style = "color: #5f6369; font-size: 12px; margin-bottom: 10px;"),
-            fluidRow(
-              column(12, plotlyOutput("pairs_sentiment_satisfaction_scatter", height = "400px"))
-            )
-          )
-        ),
-        
-        # Tab 5: Series
-          tabPanel(
-          "Series", value = "survey_series",
-          h3("Series Analysis"),
-          p("Track groups' series across multiple consecutive sessions."),
-          br(),
-          
-          # Top Section: Series summary table
-          tags$details(
-            tags$summary(h4("Series Summary (All Organizations)", style = "color: #5c2f92; margin-top: 20px; cursor: pointer;")),
-            p("Summary statistics collapsed across all organizations.", 
-              style = "color: #5f6369; font-size: 12px; margin-bottom: 10px;"),
-            DT::dataTableOutput("journeys_summary_table", width = "100%")
-          ),
-          br(),
-          
-          # Middle Section: Visualizations by series length
-          tags$details(
-            tags$summary(h4("Visualizations by Series Length", style = "color: #5c2f92; margin-top: 20px; cursor: pointer;")),
-            p("Satisfaction and engagement metrics over time, grouped by series length.", 
-              style = "color: #5f6369; font-size: 12px; margin-bottom: 10px;"),
-            h5("Satisfaction Over Time", style = "color: #5c2f92; margin-top: 15px;"),
-            fluidRow(
-              column(12, plotlyOutput("journeys_satisfaction_by_length", height = "500px"))
-            )
-          ),
-          br(),
-          
-          # Bottom Section: Single series detail view
-          tags$details(
-            tags$summary(h4("Single Series Detail View", style = "color: #5c2f92; margin-top: 20px; cursor: pointer;")),
-            p("Select a specific series to view detailed session-by-session information.", 
-              style = "color: #5f6369; font-size: 12px; margin-bottom: 10px;"),
-            selectInput(
-              "journey_detail_org",
-              label = "Organization",
-              choices = c("Select organization..." = ""),
-              selected = ""
-            ),
-            selectInput(
-              "journey_detail_group",
-              label = "Group",
-              choices = c("Select group..." = ""),
-              selected = ""
-            ),
-            br(),
-            htmlOutput("journey_detail_info"),
-            br(),
-            h5("Session-by-Session Details", style = "color: #5c2f92; margin-top: 15px;"),
-            DT::dataTableOutput("journey_detail_table", width = "100%")
-          )
-        ),
-        
-        # Tab 6: Single Session
-        tabPanel(
-          "Single Session", value = "survey_single_session",
-          h3("Within-Session Series Analysis"),
-          p("Select a specific organization (and group if applicable) to analyze a complete series across all sessions."),
-          br(),
-          
-          # Organization and Group Selection
-          div(style = "background-color: #f8f9fa; padding: 20px; border-radius: 5px; margin-bottom: 20px;",
-            h4("Select Series", style = "color: #5c2f92; margin-top: 0;"),
-            selectInput(
-              "within_session_org",
-              label = "Organization",
-              choices = c("Select organization..." = ""),
-              selected = ""
-            ),
-            selectInput(
-              "within_session_group",
-              label = "Group (optional - select if organization has groups)",
-              choices = c("Select group..." = "", "(No Group)" = "__NO_GROUP__"),
-              selected = ""
-            ),
-            br(),
-            htmlOutput("within_session_journey_info")
-          ),
-          
-          # Series analysis content
-          conditionalPanel(
-            condition = "input.within_session_org != ''",
-            h4("Series Overview", style = "color: #5c2f92; margin-top: 20px;"),
-            htmlOutput("within_session_overview"),
-            br(),
-            h4("Response Flow Over Time", style = "color: #5c2f92; margin-top: 20px;"),
-            plotlyOutput("within_session_flow_plot", height = "400px"),
-            br(),
-            h4("Session Details", style = "color: #5c2f92; margin-top: 20px;"),
-            DT::dataTableOutput("within_session_details_table")
-          )
-        ),
-        
-        # Tab 7: Single User
-        tabPanel(
-          "Single User", value = "survey_single_user",
-          h3("Individual User Analysis"),
-          p("Track a single user_id across all available data. Compare individual responses to group/session averages."),
-          br(),
-          
-          # User Selection
-          div(style = "background-color: #f8f9fa; padding: 20px; border-radius: 5px; margin-bottom: 20px;",
-            h4("Select User", style = "color: #5c2f92; margin-top: 0;"),
-            selectInput(
-              "single_user_id",
-              label = "User ID (respondent_id)",
-              choices = c("Select user..." = ""),
-              selected = ""
-            ),
-            br(),
-            htmlOutput("single_user_summary_table")
-          ),
-          
-          # User Analysis Content
-          conditionalPanel(
-            condition = "input.single_user_id != ''",
-            h4("Individual vs Group Comparisons", style = "color: #5c2f92; margin-top: 20px;"),
-            p("Your individual scores are shown as arrows/indicators relative to group distributions."),
-            br(),
-            h5("Financial Wellness Index", style = "color: #5c2f92; margin-top: 15px;"),
-            fluidRow(
-              column(12, plotlyOutput("single_user_wellness_comparison", height = "400px"))
-            ),
-            br(),
-            h5("Behavioral Index", style = "color: #5c2f92; margin-top: 15px;"),
-            fluidRow(
-              column(12, plotlyOutput("single_user_behavioral_comparison", height = "400px"))
-            ),
-            br(),
-            h5("Session Attendance", style = "color: #5c2f92; margin-top: 15px;"),
-            htmlOutput("single_user_attendance_info"),
-            br(),
-            h5("Demographics", style = "color: #5c2f92; margin-top: 15px;"),
-            htmlOutput("single_user_demographics")
-          )
-        ),
-        
-      )
     )
-  )
   )
 )
 
@@ -3306,17 +3100,37 @@ server <- function(input, output, session) {
   # ========================================================================
   # Load Master Pre/Post and Program Manager once per refresh click (explicit cache via reactiveVal)
   data_ready <- reactiveVal(FALSE)
+  # FALSE until sheets are loaded; overlay dismisses on the next flushed paint after that.
+  app_ui_ready <- reactiveVal(FALSE)
   master_pre_val <- reactiveVal(data.frame())
   master_post_val <- reactiveVal(data.frame())
+  master_annual_val <- reactiveVal(data.frame())
   program_manager_val <- reactiveVal(data.frame())
   mercy_program_manager_val <- reactiveVal(data.frame())
+  # Last choices pushed to sidebar widgets — skip no-op update*Input calls (prevents request storms).
+  last_org_choices <- reactiveVal(NULL)
+  last_group_choices <- reactiveVal(NULL)
+  last_group_selected <- reactiveVal(NULL)
+  last_lang_choices <- reactiveVal(NULL)
+  last_module_choices <- reactiveVal(NULL)
+  last_module_selected <- reactiveVal(NULL)
   
+  dismiss_dashboard_loading <- function() {
+    try(shiny::removeUI(selector = "#boot_loading_overlay", immediate = TRUE), silent = TRUE)
+    try(session$sendCustomMessage("dashBootDone", list()), silent = TRUE)
+  }
+
   load_all_data <- function() {
-    # Ensure overlay is shown while loading and always cleared at the end,
-    # even if one of the loads errors and we fall back to empty data.frames.
+    # Keep overlay up until every sheet finishes (Pre/Post/Annual/PM/Mercy).
+    app_ui_ready(FALSE)
     data_ready(FALSE)
-    on.exit(data_ready(TRUE), add = TRUE)
-    
+    last_org_choices(NULL)
+    last_group_choices(NULL)
+    last_group_selected(NULL)
+    last_lang_choices(NULL)
+    last_module_choices(NULL)
+    last_module_selected(NULL)
+
     pre <- tryCatch(load_master_pre(), error = function(e) {
       warning("load_master_pre: ", conditionMessage(e))
       data.frame()
@@ -3329,6 +3143,10 @@ server <- function(input, output, session) {
       warning("load_program_manager: ", conditionMessage(e))
       data.frame()
     })
+    annual <- tryCatch(load_master_annual(), error = function(e) {
+      warning("load_master_annual: ", conditionMessage(e))
+      data.frame()
+    })
     pm_mercy <- tryCatch(load_mercy_program_manager(), error = function(e) {
       warning("load_mercy_program_manager: ", conditionMessage(e))
       data.frame()
@@ -3336,14 +3154,36 @@ server <- function(input, output, session) {
     master_pre_val(pre)
     master_post_val(post)
     program_manager_val(pm)
+    master_annual_val(annual)
     mercy_program_manager_val(pm_mercy)
+    data_ready(TRUE)
   }
 
-  # Initial load after first paint so users actually see the loading overlay
-  session$onFlushed(function() {
-    load_all_data()
-  }, once = TRUE)
-  
+  # After sheets land, dismiss overlay on the next UI flush (filter observers run in between).
+  observeEvent(data_ready(), {
+    if (!isTRUE(data_ready())) {
+      app_ui_ready(FALSE)
+      return()
+    }
+    session$onFlushed(function() {
+      if (!isTRUE(isolate(data_ready()))) return()
+      app_ui_ready(TRUE)
+      dismiss_dashboard_loading()
+    }, once = TRUE)
+  }, ignoreInit = TRUE)
+
+  # Start sheet load as soon as the session exists (first paint can show header + overlay).
+  later::later(function() {
+    shiny::withReactiveDomain(session, {
+      tryCatch(load_all_data(), error = function(e) {
+        message("load_all_data failed: ", conditionMessage(e))
+        data_ready(TRUE)
+        app_ui_ready(TRUE)
+        dismiss_dashboard_loading()
+      })
+    })
+  }, delay = 0)
+
   # Overview zip maps: viewport from plotly relayout → coarser grid at low zoom
   zip_map_view_pre <- reactiveVal(NULL)
   zip_map_view_post <- reactiveVal(NULL)
@@ -3351,7 +3191,7 @@ server <- function(input, output, session) {
   observeEvent(input$refresh_data, {
     zip_map_view_pre(NULL)
     zip_map_view_post(NULL)
-    data_ready(FALSE)
+    app_ui_ready(FALSE)
     load_all_data()
   }, ignoreInit = TRUE)
 
@@ -3381,6 +3221,7 @@ server <- function(input, output, session) {
   # Simple accessors used throughout the app
   master_pre <- reactive(master_pre_val())
   master_post <- reactive(master_post_val())
+  master_annual <- reactive(master_annual_val())
   program_manager <- reactive(program_manager_val())
   mercy_program_manager <- reactive(mercy_program_manager_val())
   # Full company + Mercy PM for Big/Little Pre/Post typing (not org-filtered).
@@ -3407,9 +3248,9 @@ server <- function(input, output, session) {
     master_data_quality_report(master_pre(), master_post())
   })
   
-  # Loading overlay shown until Master Pre/Post + Program Manager are loaded
+  # Loading overlay until sheets are loaded and filter sidebar has settled
   output$dashboard_loading_overlay <- renderUI({
-    if (isTRUE(data_ready())) return(NULL)
+    if (isTRUE(app_ui_ready())) return(NULL)
     div(
       class = "dashboard-loading-overlay",
       div(
@@ -3447,56 +3288,69 @@ server <- function(input, output, session) {
       orgs <- unique(as.character(post_data$org_name))
       orgs <- orgs[!is.na(orgs) & trimws(orgs) != ""]
     }
-    choices_org <- c("All Organizations" = "All", setNames(orgs, orgs))
-    shiny::freezeReactiveValue(input, "selected_org")
-    updateSelectInput(session, "selected_org", choices = choices_org)
+    orgs <- sort(unique(trimws(orgs)))
+    choices_org <- setNames(orgs, orgs)
+    if (!identical(choices_org, isolate(last_org_choices()))) {
+      last_org_choices(choices_org)
+      shiny::freezeReactiveValue(input, "selected_org")
+      cur_orgs <- .sidebar_filter_values(tryCatch(input$selected_org, error = function(e) NULL))
+      sel_orgs <- intersect(cur_orgs, orgs)
+      updateSelectizeInput(session, "selected_org", choices = choices_org, selected = sel_orgs, server = TRUE)
+    }
     if (length(orgs) > 0 && !data_load_notified()) {
       data_load_notified(TRUE)
       try(shiny::showNotification(paste("Data loaded:", nrow(pre_data), "pre,", nrow(post_data), "post,", length(orgs), "organizations"), type = "message", duration = 4), silent = TRUE)
     }
   })
   observe({
+    # Nested group choices under org optgroups. Require org selection first.
     pre_data <- master_pre()
     post_data <- master_post()
-    sel_org <- .sidebar_filter_choice(tryCatch(input$selected_org, error = function(e) NULL))
-    groups <- character(0)
-    group_col <- NULL
-    org_col <- NULL
-    if (nrow(pre_data) > 0) {
-      if ("group" %in% colnames(pre_data)) group_col <- "group"
-      else if ("Group" %in% colnames(pre_data)) group_col <- "Group"
-      else { gc <- grep("^group$", colnames(pre_data), ignore.case = TRUE, value = TRUE); if (length(gc) > 0) group_col <- gc[1] }
-      if ("org_name" %in% colnames(pre_data)) org_col <- "org_name"
-      else if ("Organization" %in% colnames(pre_data)) org_col <- "Organization"
-      else { oc <- grep("^org|^organization", colnames(pre_data), ignore.case = TRUE, value = TRUE); if (length(oc) > 0) org_col <- oc[1] }
-      if (!is.null(group_col)) {
-        if (!is.null(sel_org) && sel_org != "All" && !is.null(org_col) && org_col %in% colnames(pre_data)) {
-          g <- unique(as.character(pre_data[[group_col]][pre_data[[org_col]] == sel_org]))
-        } else {
-          g <- unique(as.character(pre_data[[group_col]]))
-        }
-        groups <- g[!is.na(g) & trimws(g) != ""]
-      }
+    sel_orgs <- .sidebar_filter_values(tryCatch(input$selected_org, error = function(e) NULL))
+    choices_grp <- .build_group_optgroup_choices(pre_data, post_data, sel_orgs)
+    valid_keys <- if (!length(choices_grp)) {
+      character(0)
+    } else {
+      unique(unlist(lapply(choices_grp, unname), use.names = FALSE))
     }
-    if (length(groups) == 0 && nrow(post_data) > 0 && "group" %in% colnames(post_data)) {
-      if (!is.null(sel_org) && sel_org != "All" && "org_name" %in% colnames(post_data)) {
-        g <- unique(as.character(post_data$group[post_data$org_name == sel_org]))
-      } else {
-        g <- unique(as.character(post_data$group))
-      }
-      groups <- unique(c(groups, g[!is.na(g) & trimws(g) != ""]))
+    cur_grps <- isolate(.sidebar_filter_values(tryCatch(input$selected_group, error = function(e) NULL)))
+    sel_grps <- intersect(cur_grps, valid_keys)
+    placeholder <- if (!length(sel_orgs)) {
+      "Select organizations first"
+    } else {
+      "All groups in selected orgs"
     }
-    choices_grp <- c("All Groups" = "All", setNames(groups, groups))
-    shiny::freezeReactiveValue(input, "selected_group")
-    updateSelectInput(session, "selected_group", choices = choices_grp)
+    choices_changed <- !identical(choices_grp, isolate(last_group_choices()))
+    sel_changed <- !identical(sort(sel_grps), sort(isolate(last_group_selected()) %||% character(0)))
+    if (!choices_changed && !sel_changed) return()
+    if (choices_changed || !identical(sort(sel_grps), sort(cur_grps))) {
+      last_group_choices(choices_grp)
+      last_group_selected(sel_grps)
+      shiny::freezeReactiveValue(input, "selected_group")
+      updateSelectizeInput(
+        session, "selected_group",
+        choices = choices_grp,
+        selected = sel_grps,
+        server = FALSE,
+        options = list(placeholder = placeholder, plugins = list("remove_button"))
+      )
+    } else {
+      last_group_choices(choices_grp)
+      last_group_selected(sel_grps)
+    }
   })
   
   observe({
     pre_data <- master_pre()
     post_data <- master_post()
     choices_lang <- c("All languages" = "All", language_filter_choices(pre_data, post_data))
-    shiny::freezeReactiveValue(input, "filter_language")
-    updateSelectInput(session, "filter_language", choices = choices_lang)
+    if (!identical(choices_lang, isolate(last_lang_choices()))) {
+      last_lang_choices(choices_lang)
+      shiny::freezeReactiveValue(input, "filter_language")
+      cur_lang <- .sidebar_filter_choice(tryCatch(input$filter_language, error = function(e) NULL), default = "All")
+      sel_lang <- if (!is.null(cur_lang) && cur_lang %in% unname(choices_lang)) cur_lang else "All"
+      updateSelectInput(session, "filter_language", choices = choices_lang, selected = sel_lang)
+    }
   })
   
   # Update gender dropdown
@@ -3544,27 +3398,28 @@ server <- function(input, output, session) {
   # ========================================================================
   
   # Safe access to org/group (they live in uiOutput and may be NULL before first render)
+  # Multi-select org/group: character(0) = no restriction (all).
+  selected_orgs <- reactive({
+    .sidebar_filter_values(tryCatch(input$selected_org, error = function(e) NULL))
+  })
+  selected_groups <- reactive({
+    .sidebar_filter_values(tryCatch(input$selected_group, error = function(e) NULL))
+  })
+  # Back-compat aliases used in a few snapshot strings
   selected_org <- reactive({
-    .sidebar_filter_choice(tryCatch(input$selected_org, error = function(e) NULL))
+    orgs <- selected_orgs()
+    if (!length(orgs)) "All" else if (length(orgs) == 1L) orgs[[1]] else paste(orgs, collapse = " | ")
   })
   selected_group <- reactive({
-    .sidebar_filter_choice(tryCatch(input$selected_group, error = function(e) NULL))
+    grps <- selected_groups()
+    if (!length(grps)) "All" else if (length(grps) == 1L) grps[[1]] else paste(grps, collapse = " | ")
   })
   
   # Filtered program manager data
   filtered_program_manager <- reactive({
     data <- program_manager()
     if (nrow(data) == 0) return(data)
-    
-    # Filter by organization
-    if (selected_org() != "All" && "org_name" %in% colnames(data)) {
-      data <- data[data$org_name == selected_org(), ]
-    }
-    
-    # Filter by group
-    if (selected_group() != "All" && "group" %in% colnames(data)) {
-      data <- data[data$group == selected_group(), ]
-    }
+    data <- .apply_org_group_scope(data, selected_orgs(), selected_groups())
     
     # Filter by date range (only when checkbox on)
     if (tryCatch(isTRUE(input$use_date_filter), error = function(e) FALSE) && "date" %in% colnames(data)) {
@@ -3578,22 +3433,32 @@ server <- function(input, output, session) {
     return(data)
   })
 
-  # Sidebar: module checkboxes from Program Manager (scoped to org/group/date when PM rows exist; else full PM)
+  # Sidebar: module checkboxes from Program Manager (scoped to org/group/date when PM rows exist; else full PM).
+  # When no org/group filter, always select the full module list so a sticky subset cannot undercount.
+  # Skip updateCheckboxGroupInput when choices/selection are unchanged — re-pushing retriggers every output.
   observeEvent(
-    list(program_manager(), master_post(), filtered_program_manager()),
+    list(selected_orgs(), selected_groups(), nrow(program_manager()), nrow(master_post())),
     {
       pm_full <- tryCatch(program_manager(), error = function(e) data.frame())
       pm_scoped <- tryCatch(filtered_program_manager(), error = function(e) data.frame())
       pm <- if (nrow(pm_scoped) > 0) pm_scoped else pm_full
       post_data <- tryCatch(master_post(), error = function(e) data.frame())
       mods <- .program_manager_module_choices(pm, post_data)
+      scope_is_all <- !length(selected_orgs()) && !length(selected_groups())
       cur <- isolate(tryCatch(input$selected_modules, error = function(e) NULL))
-      new_sel <- if (is.null(cur) || length(cur) == 0) {
+      new_sel <- if (scope_is_all || is.null(cur) || length(cur) == 0) {
         mods
       } else {
         inter <- intersect(cur, mods)
         if (length(inter) > 0) inter else mods
       }
+      same_choices <- identical(mods, isolate(last_module_choices()))
+      same_sel <- identical(sort(unique(as.character(new_sel))), sort(unique(as.character(isolate(last_module_selected()) %||% character(0)))))
+      if (same_choices && same_sel) return()
+      last_module_choices(mods)
+      last_module_selected(new_sel)
+      # Freeze so downstream reactives don't see a one-tick stale subset while the UI catches up.
+      shiny::freezeReactiveValue(input, "selected_modules")
       updateCheckboxGroupInput(session, "selected_modules", choices = setNames(mods, mods), selected = new_sel)
     },
     ignoreNULL = FALSE
@@ -3640,11 +3505,59 @@ server <- function(input, output, session) {
     post_data[post_data$is_big_post == FALSE, , drop = FALSE]
   })
 
+  # Annual Survey: not session-typed. Optional org match on host-organization text; date on timestamp.
+  filtered_annual <- reactive({
+    data <- master_annual()
+    if (is.null(data) || nrow(data) == 0) return(data.frame())
+    orgs <- tryCatch(selected_orgs(), error = function(e) character(0))
+    if (length(orgs) > 0) {
+      host_col <- annual_find_col(data, ANNUAL_COL_PATTERNS$host_org)
+      org_col <- if ("org_name" %in% names(data)) "org_name" else NULL
+      keep <- rep(FALSE, nrow(data))
+      if (!is.null(host_col)) {
+        host_txt <- as.character(data[[host_col]])
+        for (org in orgs) {
+          keep <- keep | grepl(org, host_txt, ignore.case = TRUE, fixed = TRUE)
+        }
+      }
+      if (!is.null(org_col)) {
+        keep <- keep | (trimws(as.character(data[[org_col]])) %in% orgs)
+      }
+      if (any(keep)) data <- data[keep, , drop = FALSE]
+    }
+    # Demographics (when columns exist)
+    if (!is.null(input$filter_gender) && length(input$filter_gender) > 0) {
+      gcol <- annual_find_col(data, "Gender Identity")
+      if (!is.null(gcol)) data <- data[data[[gcol]] %in% input$filter_gender, , drop = FALSE]
+    }
+    if (!is.null(input$filter_veteran) && length(input$filter_veteran) > 0) {
+      vcol <- annual_find_col(data, "Veteran Status")
+      if (!is.null(vcol)) data <- data[data[[vcol]] %in% input$filter_veteran, , drop = FALSE]
+    }
+    if (!is.null(input$filter_income) && length(input$filter_income) > 0) {
+      icol <- annual_find_col(data, "Household Income")
+      if (!is.null(icol)) data <- data[data[[icol]] %in% input$filter_income, , drop = FALSE]
+    }
+    if (!is.null(input$filter_education) && length(input$filter_education) > 0) {
+      ecol <- annual_find_col(data, "highest level of education")
+      if (!is.null(ecol)) {
+        nv <- .normalize_education_for_dashboard(data[[ecol]])
+        data <- data[nv %in% input$filter_education, , drop = FALSE]
+      }
+    }
+    data <- apply_master_date_filter_rows(
+      data,
+      tryCatch(isTRUE(input$use_date_filter), error = function(e) FALSE),
+      tryCatch(input$date_range, error = function(e) NULL)
+    )
+    data
+  })
+
   filter_cache_key <- reactive({
     req(data_ready())
     digest::digest(list(
-      org = tryCatch(selected_org(), error = function(e) "All"),
-      grp = tryCatch(selected_group(), error = function(e) "All"),
+      org = tryCatch(paste(sort(selected_orgs()), collapse = "|"), error = function(e) ""),
+      grp = tryCatch(paste(sort(selected_groups()), collapse = "|"), error = function(e) ""),
       lang = tryCatch(input$filter_language, error = function(e) "All"),
       gender = tryCatch(paste(sort(input$filter_gender %||% character(0)), collapse = "|"), error = function(e) ""),
       veteran = tryCatch(paste(sort(input$filter_veteran %||% character(0)), collapse = "|"), error = function(e) ""),
@@ -3670,20 +3583,8 @@ server <- function(input, output, session) {
       # If no match would keep any pre rows but we have pre data and summary has rows, don't drop all pre (keep all; org/group filter below still applies)
     }
     if (nrow(data) == 0) return(data)
-    # Only apply org/group filter if it keeps at least one row (so Pre data still shows when selected org exists only in Post)
-    if (selected_org() != "All" && "org_name" %in% colnames(data)) {
-      data_org <- trimws(as.character(data$org_name))
-      sel_org <- trimws(as.character(selected_org()))
-      match_org <- !is.na(data_org) & data_org == sel_org
-      if (sum(match_org) > 0) data <- data[match_org, , drop = FALSE]
-    }
-    if (nrow(data) == 0) return(data)
-    if (selected_group() != "All" && "group" %in% colnames(data)) {
-      data_grp <- trimws(as.character(data$group))
-      sel_grp <- trimws(as.character(selected_group()))
-      match_grp <- !is.na(data_grp) & data_grp == sel_grp
-      if (sum(match_grp) > 0) data <- data[match_grp, , drop = FALSE]
-    }
+    # Org + nested group scope (whole org unless subgroups picked for that org)
+    data <- .apply_org_group_scope(data, selected_orgs(), selected_groups())
     
     # Filter by gender (checkbox - empty/null means all)
     if (!is.null(input$filter_gender) && length(input$filter_gender) > 0) {
@@ -3740,19 +3641,7 @@ server <- function(input, output, session) {
       if (any(match_post)) data <- data[match_post, , drop = FALSE]
     }
     if (nrow(data) == 0) return(data)
-    if (selected_org() != "All" && "org_name" %in% colnames(data)) {
-      data_org <- trimws(as.character(data$org_name))
-      sel_org <- trimws(as.character(selected_org()))
-      match_org <- !is.na(data_org) & data_org == sel_org
-      if (sum(match_org) > 0) data <- data[match_org, , drop = FALSE]
-    }
-    if (nrow(data) == 0) return(data)
-    if (selected_group() != "All" && "group" %in% colnames(data)) {
-      data_grp <- trimws(as.character(data$group))
-      sel_grp <- trimws(as.character(selected_group()))
-      match_grp <- !is.na(data_grp) & data_grp == sel_grp
-      if (sum(match_grp) > 0) data <- data[match_grp, , drop = FALSE]
-    }
+    data <- .apply_org_group_scope(data, selected_orgs(), selected_groups())
     if (!is.null(input$filter_gender) && length(input$filter_gender) > 0) {
       gender_col <- grep("gender|Gender", colnames(data), ignore.case = TRUE, value = TRUE)
       if (length(gender_col) > 0) data <- data[data[[gender_col[1]]] %in% input$filter_gender, ]
@@ -3939,7 +3828,13 @@ server <- function(input, output, session) {
     tryCatch({
       pre_data <- master_pre()
       post_data <- master_post()
-      pm_data <- tryCatch(program_manager(), error = function(e) data.frame())
+      # Company + Mercy PM so Mercy workshops type/series-label correctly in Overview
+      pm_data <- tryCatch({
+        combine_program_managers_for_typing(
+          program_manager(),
+          mercy_program_manager()
+        )
+      }, error = function(e) tryCatch(program_manager(), error = function(e2) data.frame()))
       create_session_summary_from_master(pre_data, post_data, pm_data)
     }, error = function(e) {
       warning("session_summary_raw error: ", conditionMessage(e))
@@ -3947,17 +3842,15 @@ server <- function(input, output, session) {
     })
   })
   
-  # Centralized session filters (date / org / group)
+  # Centralized session filters (date / org / group). org/group are character vectors; empty = all.
   current_session_filters <- reactive({
     use_date <- tryCatch(isTRUE(input$use_date_filter), error = function(e) FALSE)
     dr <- tryCatch(input$date_range, error = function(e) NULL)
-    sel_org <- .sidebar_filter_choice(tryCatch(input$selected_org, error = function(e) NULL))
-    sel_grp <- .sidebar_filter_choice(tryCatch(input$selected_group, error = function(e) NULL))
     list(
       use_date = use_date,
       date_range = dr,
-      org = sel_org,
-      group = sel_grp
+      org = .sidebar_filter_values(tryCatch(input$selected_org, error = function(e) NULL)),
+      group = .sidebar_filter_values(tryCatch(input$selected_group, error = function(e) NULL))
     )
   })
   
@@ -3986,40 +3879,30 @@ server <- function(input, output, session) {
         }
       }
 
-      # Organization filter
-      if (!is.null(filters$org) &&
-          length(filters$org) == 1 &&
-          filters$org != "All" &&
+      # Organization + nested group scope
+      if ((length(filters$org) > 0 || length(filters$group) > 0) &&
           "org_name" %in% colnames(summary)) {
-        summary <- dplyr::filter(
-          summary,
-          dplyr::coalesce(as.character(.data[["org_name"]]), "") == filters$org
-        )
-      }
-
-      # Group filter
-      if (!is.null(filters$group) &&
-          length(filters$group) == 1 &&
-          filters$group != "All" &&
-          "group" %in% colnames(summary)) {
-        summary <- dplyr::filter(
-          summary,
-          dplyr::coalesce(as.character(.data[["group"]]), "") == filters$group
-        )
-      }
-
-      # Modules taught (sidebar): same vocabulary as sidebar (scoped PM when available)
-      pm_full_m <- tryCatch(program_manager(), error = function(e) data.frame())
-      pm_scoped_m <- tryCatch(filtered_program_manager(), error = function(e) data.frame())
-      pm_m <- if (nrow(pm_scoped_m) > 0) pm_scoped_m else pm_full_m
-      post_m <- tryCatch(master_post(), error = function(e) data.frame())
-      full_mods <- .program_manager_module_choices(pm_m, post_m)
-      sel_mod <- tryCatch(input$selected_modules, error = function(e) character(0))
-      if (length(sel_mod) > 0 && length(full_mods) > 0 &&
-          !identical(sort(unique(sel_mod)), sort(unique(full_mods))) &&
-          "modules_taught" %in% colnames(summary)) {
-        keep <- .session_row_matches_selected_modules(summary$modules_taught, sel_mod)
+        gvec <- if ("group" %in% colnames(summary)) summary$group else rep(NA_character_, nrow(summary))
+        keep <- .rows_match_org_group_scope(summary$org_name, gvec, filters$org, filters$group)
         summary <- summary[keep, , drop = FALSE]
+      }
+
+      # Modules taught (sidebar). When no org/group filter, ignore selected_modules
+      # so a stale scoped checkbox subset cannot flash a low total before the UI resets.
+      scope_all <- !length(filters$org) && !length(filters$group)
+      if (!scope_all) {
+        pm_full_m <- tryCatch(program_manager(), error = function(e) data.frame())
+        pm_scoped_m <- tryCatch(filtered_program_manager(), error = function(e) data.frame())
+        pm_m <- if (nrow(pm_scoped_m) > 0) pm_scoped_m else pm_full_m
+        post_m <- tryCatch(master_post(), error = function(e) data.frame())
+        full_mods <- .program_manager_module_choices(pm_m, post_m)
+        sel_mod <- tryCatch(input$selected_modules, error = function(e) character(0))
+        if (length(sel_mod) > 0 && length(full_mods) > 0 &&
+            !identical(sort(unique(sel_mod)), sort(unique(full_mods))) &&
+            "modules_taught" %in% colnames(summary)) {
+          keep <- .session_row_matches_selected_modules(summary$modules_taught, sel_mod)
+          summary <- summary[keep, , drop = FALSE]
+        }
       }
 
       summary
@@ -4090,7 +3973,12 @@ server <- function(input, output, session) {
     }, error = function(e) { warning("organization_completed_data error: ", conditionMessage(e)); data.frame() })
   })
   
-  register_dashboard_modules(input, output, session, filtered_pre, filtered_post)
+  register_dashboard_modules(
+    input, output, session,
+    filtered_pre, filtered_post, filtered_annual,
+    filtered_big_pre, filtered_little_pre, filtered_little_post, filtered_big_post_only,
+    session_summary_data
+  )
 
   .render_org_table <- function(org_summary, selection = "none") {
     if (is.null(org_summary) || nrow(org_summary) == 0) return(DT::datatable(data.frame(Message = "No data."), rownames = FALSE))
@@ -4135,17 +4023,19 @@ server <- function(input, output, session) {
     )
   })
   output$impact_org_table_underway <- DT::renderDataTable({
+    req(app_ui_ready())
     uw <- tryCatch(organization_underway_data(), error = function(e) data.frame())
     if (is.null(uw) || nrow(uw) == 0) {
       return(DT::datatable(data.frame(), options = list(dom = "t"), rownames = FALSE))
     }
     tryCatch(.render_org_table(uw), error = function(e) DT::datatable(data.frame(Error = paste("Error:", conditionMessage(e))), rownames = FALSE))
   })
-  outputOptions(output, "impact_org_table_underway", suspendWhenHidden = FALSE)
+  outputOptions(output, "impact_org_table_underway", suspendWhenHidden = TRUE)
   output$impact_org_table_completed <- DT::renderDataTable({
+    req(app_ui_ready())
     tryCatch(.render_org_table(organization_completed_data(), selection = "single"), error = function(e) DT::datatable(data.frame(Error = paste("Error:", conditionMessage(e))), rownames = FALSE))
   })
-  outputOptions(output, "impact_org_table_completed", suspendWhenHidden = FALSE)
+  outputOptions(output, "impact_org_table_completed", suspendWhenHidden = TRUE)
 
   # Per-session detail behind each completed org row (drill-down to confirm series counts).
   .org_session_detail_df <- function(sessions, org_name) {
@@ -4229,10 +4119,11 @@ server <- function(input, output, session) {
       )
     }, error = function(e) empty_dt)
   })
-  outputOptions(output, "impact_org_detail_table", suspendWhenHidden = FALSE)
+  outputOptions(output, "impact_org_detail_table", suspendWhenHidden = TRUE)
   # Series response matrices by planned length (Overview > Responses by Series). Uses PM
   # sessions_in_series when present; otherwise falls back to number of session rows (not n() alone when PM has length on one row).
   journey_response_matrices <- reactive({
+    req(app_ui_ready())
     ss <- session_summary_data()
     pre <- tryCatch(filtered_pre(), error = function(e) data.frame())
     post <- tryCatch(filtered_post(), error = function(e) data.frame())
@@ -4350,6 +4241,7 @@ server <- function(input, output, session) {
     dt
   }
   output$overview_journey_response_tables <- renderUI({
+    req(app_ui_ready())
     mats <- journey_response_matrices()
     if (length(mats) == 0) return(HTML("<p style='color: #5f6369;'>No series data available.</p>"))
     lens <- sort(as.numeric(names(mats)))
@@ -4364,17 +4256,18 @@ server <- function(input, output, session) {
     }
     do.call(tagList, out)
   })
-  outputOptions(output, "overview_journey_response_tables", suspendWhenHidden = FALSE)
+  outputOptions(output, "overview_journey_response_tables", suspendWhenHidden = TRUE)
   lapply(1:6, function(l) {
     output_name <- paste0("overview_journey_len", l)
     output[[output_name]] <- DT::renderDataTable({
+      req(app_ui_ready())
       mats <- journey_response_matrices()
       if (!as.character(l) %in% names(mats)) {
         return(DT::datatable(data.frame(Message = paste0("No series of length ", l, ".")), rownames = FALSE))
       }
       .render_journey_response_heatmap(mats[[as.character(l)]])
     })
-    outputOptions(output, output_name, suspendWhenHidden = FALSE)
+    outputOptions(output, output_name, suspendWhenHidden = TRUE)
   })
   output$impact_session_table <- DT::renderDataTable({
     tryCatch({
@@ -4550,6 +4443,39 @@ server <- function(input, output, session) {
         )
     }, error = function(e) plotly_empty() %>% layout(title = paste("Error:", conditionMessage(e)), font = PLOT_FONT))
   })
+
+  output$impact_wellness_hist_summary <- renderUI({
+    big_pre_data <- filtered_big_pre()
+    if (nrow(big_pre_data) == 0) return(NULL)
+    wellness <- calculate_wellness_index(big_pre_data)
+    wellness <- wellness[is.finite(wellness)]
+    if (!length(wellness)) return(NULL)
+    deterministic_summary_box(
+      scores = wellness, mode = "level",
+      null_value = 0, positive_threshold = 0,
+      scale_label = "(-3 to +3)",
+      headline_label = "Above neutral (score above 0)",
+      scope_text = scope_sentence(input),
+      accent = PRE_INDEX_COLOR
+    )
+  })
+
+  output$impact_post_hist_summary <- renderUI({
+    big_post_data <- filtered_big_post_only()
+    if (nrow(big_post_data) == 0) return(NULL)
+    impact_idx <- calculate_post_impact_index(big_post_data)
+    impact_idx <- impact_idx[is.finite(impact_idx)]
+    if (!length(impact_idx)) return(NULL)
+    deterministic_summary_box(
+      scores = impact_idx, mode = "level",
+      null_value = 0, positive_threshold = 0,
+      scale_label = "(-3 to +3)",
+      headline_label = "Above neutral (score above 0)",
+      scope_text = scope_sentence(input),
+      accent = POST_INDEX_COLOR
+    )
+  })
+
   output$impact_wellness_variable_mapping <- DT::renderDataTable({
     tryCatch({
       # Questions on rows, surveys on columns (matches the Reach mapping template).
@@ -4569,6 +4495,7 @@ server <- function(input, output, session) {
         Little_Pre = rep("No", 9),
         Little_Post = rep("No", 9),
         Big_Post = rep("Yes", 9),
+        Annual = c("Yes", "Yes", "Yes", "Yes", "Yes", "Yes", "Yes", "Yes", "Yes"),
         stringsAsFactors = FALSE
       )
       .style_variable_mapping_table(mapping)
@@ -5045,7 +4972,7 @@ server <- function(input, output, session) {
     post_idx <- calculate_post_impact_index(big_post)
     pre_df <- data.frame(respondent_id = big_pre$respondent_id, pre = pre_idx, stringsAsFactors = FALSE)
     post_df <- data.frame(respondent_id = big_post$respondent_id, post = post_idx, stringsAsFactors = FALSE)
-    valid_id <- function(ids) !is.na(ids) & nzchar(trimws(ids)) & !grepl("^ANON#", ids)
+    valid_id <- function(ids) !is.na(ids) & nzchar(trimws(ids)) & !grepl("^ANON", ids, ignore.case = TRUE)
     pre_df <- pre_df[valid_id(pre_df$respondent_id), , drop = FALSE]
     post_df <- post_df[valid_id(post_df$respondent_id), , drop = FALSE]
     paired <- merge(pre_df, post_df, by = "respondent_id")
@@ -5359,6 +5286,16 @@ server <- function(input, output, session) {
   })
 
   # Overview: Master submission timeline (dual Y, day/week/month) + Program Manager series timeline
+  output$overview_master_weekly_filter_note <- renderUI({
+    pre_n <- tryCatch(nrow(filtered_pre()), error = function(e) NA_integer_)
+    post_n <- tryCatch(nrow(filtered_post()), error = function(e) NA_integer_)
+    if (!is.finite(pre_n) || !is.finite(post_n)) return(NULL)
+    p(
+      style = "font-size: 12px; color: #5f6369; margin: 4px 0 8px 0;",
+      paste0("Filtered rows: Pre ", pre_n, " | Post ", post_n)
+    )
+  })
+
   output$overview_master_weekly_line <- renderPlotly({
     tryCatch({
       unit <- if (is.null(input$overview_master_time_unit)) "weeks" else input$overview_master_time_unit
@@ -5378,13 +5315,6 @@ server <- function(input, output, session) {
       if (!show_resp && !show_work) {
         return(plotly_empty() %>% layout(title = "Turn on Responses and/or Workshops", font = PLOT_FONT))
       }
-      pre_n <- tryCatch(nrow(filtered_pre()), error = function(e) NA_integer_)
-      post_n <- tryCatch(nrow(filtered_post()), error = function(e) NA_integer_)
-      filter_note <- if (is.finite(pre_n) && is.finite(post_n)) {
-        paste0("Filtered rows: Pre ", pre_n, " | Post ", post_n)
-      } else {
-        NULL
-      }
       y_left <- switch(unit,
         days = "Responses per day",
         weeks = "Responses per week",
@@ -5398,10 +5328,20 @@ server <- function(input, output, session) {
         "Distinct workshops"
       )
       x_title <- paste0("Time (", res$period_label, ")")
+      # Pad date range so lines are not flush against plot edges
+      d_min <- as.Date(min(df$period, na.rm = TRUE))
+      d_max <- as.Date(max(df$period, na.rm = TRUE))
+      span_days <- as.numeric(d_max - d_min)
+      pad <- if (!is.finite(span_days) || span_days <= 0) {
+        7L
+      } else {
+        as.integer(max(7L, ceiling(span_days * 0.04)))
+      }
       xa <- list(
-        title = x_title,
+        title = list(text = x_title, standoff = 18),
         type = "date",
-        range = c(as.character(min(df$period)), as.character(max(df$period)))
+        range = c(as.character(d_min - pad), as.character(d_max + pad)),
+        automargin = TRUE
       )
       if (length(res$x_breaks) > 0L) {
         xa$tickmode <- "array"
@@ -5432,13 +5372,16 @@ server <- function(input, output, session) {
           yaxis = y_w, hovertemplate = "<b>Workshops</b>: %{y}<extra></extra>"
         )
       }
-      # plotly::layout must receive named args — passing a list breaks yaxis/yaxis2 merge (dual-axis + shapes).
-      leg <- list(orientation = "h", y = -0.22, x = 0.5, xanchor = "center", yanchor = "top")
-      layout_title <- if (!is.null(filter_note)) {
-        list(text = filter_note, font = list(size = 11, color = "#5f6369"), x = 0, xref = "paper", y = 1.08, yref = "paper")
-      } else {
-        NULL
-      }
+      # Legend below x-axis with enough bottom margin so dates stay readable
+      leg <- list(
+        orientation = "h",
+        y = -0.28,
+        x = 0.5,
+        xanchor = "center",
+        yanchor = "top",
+        font = list(size = 12)
+      )
+      marg <- list(l = 85, r = 70, b = 130, t = 24, pad = 4)
       if (isTRUE(show_resp) && isTRUE(show_work)) {
         plotly::layout(p,
           font = PLOT_FONT,
@@ -5446,15 +5389,15 @@ server <- function(input, output, session) {
           xaxis = xa,
           legend = leg,
           shapes = vshapes,
-          margin = list(b = 80, t = 50),
-          annotations = if (!is.null(layout_title)) list(layout_title) else NULL,
-          yaxis = list(title = y_left, side = "left", rangemode = "tozero"),
+          margin = marg,
+          yaxis = list(title = y_left, side = "left", rangemode = "tozero", automargin = TRUE),
           yaxis2 = list(
             title = y_right,
             overlaying = "y",
             side = "right",
             showgrid = FALSE,
-            rangemode = "tozero"
+            rangemode = "tozero",
+            automargin = TRUE
           )
         )
       } else if (isTRUE(show_resp)) {
@@ -5464,9 +5407,8 @@ server <- function(input, output, session) {
           xaxis = xa,
           legend = leg,
           shapes = vshapes,
-          margin = list(b = 80, t = 50),
-          annotations = if (!is.null(layout_title)) list(layout_title) else NULL,
-          yaxis = list(title = y_left, side = "left", rangemode = "tozero")
+          margin = marg,
+          yaxis = list(title = y_left, side = "left", rangemode = "tozero", automargin = TRUE)
         )
       } else {
         plotly::layout(p,
@@ -5475,9 +5417,8 @@ server <- function(input, output, session) {
           xaxis = xa,
           legend = leg,
           shapes = vshapes,
-          margin = list(b = 80, t = 50),
-          annotations = if (!is.null(layout_title)) list(layout_title) else NULL,
-          yaxis = list(title = y_right, side = "left", rangemode = "tozero")
+          margin = marg,
+          yaxis = list(title = y_right, side = "left", rangemode = "tozero", automargin = TRUE)
         )
       }
     }, error = function(e) {
@@ -5548,25 +5489,51 @@ server <- function(input, output, session) {
     dq_dt(dq_report()$cols_post)
   })
 
+  # Shared builder for PM Gantt so UI height matches plot content
+  overview_pm_gantt_built <- reactive({
+    unit <- if (is.null(input$overview_pm_time_unit)) "weeks" else input$overview_pm_time_unit
+    sort_by <- if (is.null(input$overview_pm_sort)) "first_asc" else input$overview_pm_sort
+    row_grain <- if (isTRUE(input$overview_pm_rows_by_org)) "org" else "group"
+    res <- build_program_manager_timeline(program_manager(), unit, sort_by, row_grain = row_grain)
+    if (!is.null(res$msg)) return(list(error = res$msg, h_px = 320L, n_series = 0L, res = NULL))
+    # Date window: sidebar Filter by date range when enabled; otherwise full PM schedule
+    use_date <- tryCatch(isTRUE(input$use_date_filter), error = function(e) FALSE)
+    if (isTRUE(use_date)) {
+      dr <- tryCatch(input$date_range, error = function(e) NULL)
+      if (!is.null(dr) && length(dr) >= 2) {
+        rs <- tryCatch(as.Date(dr[1]), error = function(e) NA)
+        re <- tryCatch(as.Date(dr[2]), error = function(e) NA)
+        if (!is.na(rs) && !is.na(re)) {
+          res <- overview_clip_pm_timeline_window(res, rs, re)
+        }
+      }
+    }
+    pdat <- res$df
+    if (is.null(pdat) || nrow(pdat) == 0) {
+      return(list(error = "No Program Manager rows to plot.", h_px = 320L, n_series = 0L, res = NULL))
+    }
+    n_series <- if (is.factor(pdat$series)) nlevels(pdat$series) else length(unique(as.character(pdat$series)))
+    # Tighter rows; keep room for x-axis labels
+    h_px <- as.integer(max(360L, 24L * max(1L, n_series) + 140L))
+    list(error = NULL, h_px = h_px, n_series = n_series, res = res)
+  })
+
+  output$overview_program_manager_gantt_ui <- renderUI({
+    built <- tryCatch(overview_pm_gantt_built(), error = function(e) NULL)
+    h <- if (!is.null(built) && is.finite(built$h_px)) built$h_px else 420L
+    plotlyOutput("overview_program_manager_gantt", height = paste0(h, "px"))
+  })
+
   output$overview_program_manager_gantt <- renderPlotly({
     tryCatch({
-      unit <- if (is.null(input$overview_pm_time_unit)) "weeks" else input$overview_pm_time_unit
-      sort_by <- if (is.null(input$overview_pm_sort)) "first_asc" else input$overview_pm_sort
-      res <- build_program_manager_timeline(program_manager(), unit, sort_by)
-      if (!is.null(res$msg)) {
-        return(plotly_empty() %>% layout(title = res$msg, font = PLOT_FONT))
+      built <- overview_pm_gantt_built()
+      if (!is.null(built$error)) {
+        return(plotly_empty() %>% layout(title = built$error, font = PLOT_FONT))
       }
-      rs <- tryCatch(as.Date(input$overview_pm_range_start), error = function(e) NA)
-      re <- tryCatch(as.Date(input$overview_pm_range_end), error = function(e) NA)
-      if (!is.na(rs) && !is.na(re)) {
-        res <- overview_clip_pm_timeline_window(res, rs, re)
-      }
+      res <- built$res
       pdat <- res$df
-      if (is.null(pdat) || nrow(pdat) == 0) {
-        return(plotly_empty() %>% layout(title = "No Program Manager rows to plot.", font = PLOT_FONT))
-      }
-      n_series <- if (is.factor(pdat$series)) nlevels(pdat$series) else length(unique(as.character(pdat$series)))
-      h_px <- max(320, min(36 * max(1L, n_series), 1200))
+      h_px <- built$h_px
+      n_series <- built$n_series
 
       max_n <- max(pdat$n, na.rm = TRUE)
       if (!is.finite(max_n) || max_n < 0) max_n <- 0L
@@ -5587,7 +5554,6 @@ server <- function(input, output, session) {
           inherit.aes = FALSE
         )
       }
-      # Days: one line per weekend (Sunday = boundary after Saturday); weeks: month transitions
       vln_days <- if (!is.null(res$sat_sun_boundary_vlines) && nrow(res$sat_sun_boundary_vlines) > 0) {
         res$sat_sun_boundary_vlines
       } else if (!is.null(res$weekend_vlines) && nrow(res$weekend_vlines) > 0) {
@@ -5617,7 +5583,7 @@ server <- function(input, output, session) {
           limits = as.Date(res$x_limits),
           breaks = res$x_breaks,
           labels = res$x_labels,
-          expand = ggplot2::expansion(mult = c(0, 0), add = c(0.5, 0.5))
+          expand = ggplot2::expansion(mult = c(0.02, 0.02), add = c(0.5, 0.5))
         ) +
         ggplot2::scale_fill_gradient(
           low = "#efe8f5",
@@ -5628,49 +5594,46 @@ server <- function(input, output, session) {
           name = "Workshops\nin bin",
           na.value = "#efe8f5"
         ) +
-        ggplot2::theme_minimal(base_size = 12) +
+        ggplot2::theme_minimal(base_size = 11) +
         ggplot2::theme(
           panel.grid.major = ggplot2::element_blank(),
-          axis.text.y = ggplot2::element_text(size = 9),
-          axis.text.x = ggplot2::element_text(angle = 45, hjust = 1, size = 9),
-          plot.background = ggplot2::element_rect(fill = "white", color = NA)
+          axis.text.y = ggplot2::element_text(size = 8),
+          axis.text.x = ggplot2::element_text(angle = 45, hjust = 1, size = 8),
+          plot.background = ggplot2::element_rect(fill = "white", color = NA),
+          plot.margin = ggplot2::margin(4, 8, 4, 4)
         ) +
         ggplot2::labs(x = paste0("Time (", res$period_label, ")"), y = NULL)
 
-      gp <- ggplotly(p, height = h_px) %>%
+      ggplotly(p, height = h_px, tooltip = c("x", "y", "fill")) %>%
         layout(
           font = PLOT_FONT,
-          margin = list(l = 180, b = 100),
+          margin = list(l = 200, r = 90, b = 100, t = 20, pad = 2),
           xaxis = list(
-            rangeslider = list(visible = TRUE, thickness = 0.06),
-            title = paste0("Time (", res$period_label, ")")
-          )
+            title = list(text = paste0("Time (", res$period_label, ")"), standoff = 12),
+            automargin = TRUE,
+            showticklabels = TRUE,
+            tickangle = -45,
+            rangeslider = list(visible = FALSE)
+          ),
+          yaxis = list(automargin = TRUE, side = "left"),
+          legend = list(orientation = "v", y = 1, yanchor = "top")
         )
-      gp
     }, error = function(e) {
       plotly_empty() %>% layout(title = paste("Error:", conditionMessage(e)), font = PLOT_FONT)
     })
   })
 
-  # Default PM Gantt visible window to last ~90 days of workshop data
-  observeEvent(program_manager(), {
-    pm <- tryCatch(program_manager(), error = function(e) data.frame())
-    if (nrow(pm) == 0) return()
-    date_c <- overview_pm_find_col(pm, c("date", "Date"))
-    if (is.na(date_c)) return()
-    d <- overview_pm_parse_date(pm[[date_c]])
-    d <- d[!is.na(d)]
-    if (!length(d)) return()
-    dmax <- max(d)
-    dmin <- max(min(d), dmax - 90L)
-    updateDateInput(session, "overview_pm_range_start", value = dmin)
-    updateDateInput(session, "overview_pm_range_end", value = dmax + 7L)
-  }, once = TRUE)
-
   # Debounced bundle of summary inputs to keep stats tables from re-rendering
   # every time the sidebar updates choices during initial data load.
   summary_stats_bundle <- reactive({
     req(data_ready())
+    .n_base_sessions <- function(d) {
+      if (is.null(d) || nrow(d) == 0 || !"session_id" %in% names(d)) return(0L)
+      s <- trimws(as.character(d$session_id))
+      s <- s[!is.na(s) & nzchar(s)]
+      if (!length(s)) return(0L)
+      length(unique(base_session_id(s)))
+    }
     list(
       summary_data = tryCatch(session_summary_data(), error = function(e) data.frame()),
       pre_n = tryCatch(nrow(filtered_pre()), error = function(e) NA_integer_),
@@ -5679,61 +5642,16 @@ server <- function(input, output, session) {
       little_pre_n = tryCatch(nrow(filtered_little_pre()), error = function(e) NA_integer_),
       little_post_n = tryCatch(nrow(filtered_little_post()), error = function(e) NA_integer_),
       big_post_n = tryCatch(nrow(filtered_big_post_only()), error = function(e) NA_integer_),
-      big_pre_sessions = tryCatch({
-        d <- filtered_big_pre()
-        if (nrow(d) == 0 || !"session_id" %in% names(d)) 0L else length(unique(trimws(as.character(d$session_id[!is.na(d$session_id) & nzchar(trimws(as.character(d$session_id)))]))))
-      }, error = function(e) 0L),
-      little_pre_sessions = tryCatch({
-        d <- filtered_little_pre()
-        if (nrow(d) == 0 || !"session_id" %in% names(d)) 0L else length(unique(trimws(as.character(d$session_id[!is.na(d$session_id) & nzchar(trimws(as.character(d$session_id)))]))))
-      }, error = function(e) 0L),
-      little_post_sessions = tryCatch({
-        d <- filtered_little_post()
-        if (nrow(d) == 0 || !"session_id" %in% names(d)) 0L else length(unique(trimws(as.character(d$session_id[!is.na(d$session_id) & nzchar(trimws(as.character(d$session_id)))]))))
-      }, error = function(e) 0L),
-      big_post_sessions = tryCatch({
-        d <- filtered_big_post_only()
-        if (nrow(d) == 0 || !"session_id" %in% names(d)) 0L else length(unique(trimws(as.character(d$session_id[!is.na(d$session_id) & nzchar(trimws(as.character(d$session_id)))]))))
-      }, error = function(e) 0L),
+      annual_n = tryCatch(nrow(filtered_annual()), error = function(e) NA_integer_),
+      big_pre_sessions = tryCatch(.n_base_sessions(filtered_big_pre()), error = function(e) 0L),
+      little_pre_sessions = tryCatch(.n_base_sessions(filtered_little_pre()), error = function(e) 0L),
+      little_post_sessions = tryCatch(.n_base_sessions(filtered_little_post()), error = function(e) 0L),
+      big_post_sessions = tryCatch(.n_base_sessions(filtered_big_post_only()), error = function(e) 0L),
       lang_sel = tryCatch(input$filter_language, error = function(e) "All")
     )
   }) %>% debounce(350)
 
-  # Summary Statistics table (same metrics as At a Glance) — duplicate at top of Impact Overview
-  output$impact_overview_summary_stats_table <- renderTable({
-    bundle <- summary_stats_bundle()
-    summary_data <- bundle$summary_data
-    if (is.null(summary_data) || nrow(summary_data) == 0) {
-      return(data.frame(Message = "No session data for current filters.", stringsAsFactors = FALSE))
-    }
-    stats <- calculate_session_stats(summary_data)
-    pre_n <- if (is.finite(bundle$pre_n)) bundle$pre_n else stats$total_pre_responses
-    post_n <- if (is.finite(bundle$post_n)) bundle$post_n else stats$total_post_responses
-    fmt_int <- function(x) formatC(round(as.numeric(x)), format = "d", big.mark = ",")
-    fmt_avg <- function(x) formatC(round(as.numeric(x), 1), format = "f", digits = 1)
-    out <- data.frame(
-      Metric = c("Sessions", "Responses", "Average responses per session"),
-      Total = c(
-        fmt_int(stats$total_sessions),
-        fmt_int(pre_n + post_n),
-        "-"
-      ),
-      Pre = c(
-        fmt_int(stats$sessions_with_pre),
-        fmt_int(pre_n),
-        fmt_avg(stats$avg_pre_per_session)
-      ),
-      Post = c(
-        fmt_int(stats$sessions_with_post),
-        fmt_int(post_n),
-        fmt_avg(stats$avg_post_per_session)
-      ),
-      stringsAsFactors = FALSE,
-      check.names = FALSE
-    )
-    names(out)[1] <- ""
-    out
-  }, striped = TRUE, bordered = TRUE, spacing = "s", width = "100%", align = "lrrr")
+  # Summary Statistics table removed from Overview — survey-type table is the sole Response Descriptives view.
 
   output$impact_overview_survey_type_stats_table <- renderTable({
     bundle <- summary_stats_bundle()
@@ -5746,34 +5664,48 @@ server <- function(input, output, session) {
     lp <- if (is.finite(bundle$little_pre_n)) bundle$little_pre_n else 0L
     lpo <- if (is.finite(bundle$little_post_n)) bundle$little_post_n else 0L
     bpo <- if (is.finite(bundle$big_post_n)) bundle$big_post_n else 0L
+    ann <- if (is.finite(bundle$annual_n)) bundle$annual_n else 0L
     bp_s <- if (is.finite(bundle$big_pre_sessions)) bundle$big_pre_sessions else 0L
     lp_s <- if (is.finite(bundle$little_pre_sessions)) bundle$little_pre_sessions else 0L
     lpo_s <- if (is.finite(bundle$little_post_sessions)) bundle$little_post_sessions else 0L
     bpo_s <- if (is.finite(bundle$big_post_sessions)) bundle$big_post_sessions else 0L
-    # Distinct sessions across all typed rows (may be < sum of columns)
-    all_sids <- character(0)
+    # Distinct workshops across typed Pre/Post (base_session_id); used for Sessions row.
+    all_bids <- character(0)
     for (getter in list(filtered_big_pre, filtered_little_pre, filtered_little_post, filtered_big_post_only)) {
       d <- tryCatch(getter(), error = function(e) data.frame())
       if (nrow(d) > 0 && "session_id" %in% names(d)) {
         s <- trimws(as.character(d$session_id))
-        all_sids <- c(all_sids, s[!is.na(s) & nzchar(s)])
+        s <- s[!is.na(s) & nzchar(s)]
+        if (length(s)) all_bids <- c(all_bids, base_session_id(s))
       }
     }
-    total_sessions <- length(unique(all_sids))
-    total_resp <- bp + lp + lpo + bpo
+    sess_total_sessions <- length(unique(all_bids))
+    sess_total_resp <- bp + lp + lpo + bpo
+    grand_resp <- sess_total_resp + ann
     out <- data.frame(
       Metric = c("Sessions", "Responses", "Average responses per session"),
-      Total = c(fmt_int(total_sessions), fmt_int(total_resp), "-"),
       `Big Pre` = c(fmt_int(bp_s), fmt_int(bp), fmt_avg(bp, bp_s)),
       `Little Pre` = c(fmt_int(lp_s), fmt_int(lp), fmt_avg(lp, lp_s)),
       `Little Post` = c(fmt_int(lpo_s), fmt_int(lpo), fmt_avg(lpo, lpo_s)),
       `Big Post` = c(fmt_int(bpo_s), fmt_int(bpo), fmt_avg(bpo, bpo_s)),
+      `Session Total` = c(
+        fmt_int(sess_total_sessions),
+        fmt_int(sess_total_resp),
+        fmt_avg(sess_total_resp, sess_total_sessions)
+      ),
+      `Annual Survey` = c("-", fmt_int(ann), "-"),
+      Total = c(
+        "-",
+        fmt_int(grand_resp),
+        "-"
+      ),
       stringsAsFactors = FALSE,
       check.names = FALSE
     )
-    names(out)[1] <- ""
+    names(out)[1] <- "Metric"
     out
-  }, striped = TRUE, bordered = TRUE, spacing = "s", width = "100%", align = "lrrrrr")
+  }, striped = TRUE, bordered = TRUE, spacing = "s", width = "100%")
+  # (no fixed align= — knitr errors when align length ≠ ncol; defaults are fine)
 
   # Summary statistics output (Overview tab — At a Glance HTML block).
   output$session_summary_stats <- renderUI({
@@ -6363,12 +6295,14 @@ server <- function(input, output, session) {
       mapping <- data.frame(
         Variable = c(
           "Past financial behaviors (multi-select) \u2192 Behavioral Index",
-          "Planned / completed actions after workshop (multi-select) \u2192 Planned Actions Index"
+          "Planned / completed actions after workshop (multi-select) \u2192 Planned Actions Index",
+          "As a result of my workshop(s)... (Annual multi-select) \u2192 Annual Behavior Index"
         ),
-        Big_Pre = c("Yes", "No"),
-        Little_Pre = c("No", "No"),
-        Little_Post = c("No", "No"),
-        Big_Post = c("No", "Yes"),
+        Big_Pre = c("Yes", "No", "No"),
+        Little_Pre = c("No", "No", "No"),
+        Little_Post = c("No", "No", "No"),
+        Big_Post = c("No", "Yes", "No"),
+        Annual = c("No", "No", "Yes"),
         stringsAsFactors = FALSE
       )
       .style_variable_mapping_table(mapping)
@@ -6386,6 +6320,7 @@ server <- function(input, output, session) {
         Little_Pre = c("No", "No"),
         Little_Post = c("Yes", "No"),
         Big_Post = c("Yes", "Yes"),
+        Annual = c("No", "Yes"),
         stringsAsFactors = FALSE
       )
       .style_variable_mapping_table(mapping)
@@ -6393,17 +6328,28 @@ server <- function(input, output, session) {
   })
   output$impact_learning_variable_mapping <- DT::renderDataTable({
     tryCatch({
-      # Questions on rows, surveys on columns (matches the Reach mapping template).
       mapping <- data.frame(
         Variable = c(
-          "Better understanding of topics (Likert)",
+          "Topic understanding (Compared to before... better understanding)",
           "Learning interests / keep in touch (multi-select)",
-          "Open-text reflections & impact stories"
+          "Learn-more topics (open / multi)",
+          "Wordcloud / open text — Pre opening & comments",
+          "Wordcloud / open text — Post reflection & impact story",
+          "Wordcloud / open text — Annual takeaway / goal / impact story"
         ),
-        Big_Pre = c("No", "No", "Yes"),
-        Little_Pre = c("No", "No", "No"),
-        Little_Post = c("No", "No", "No"),
-        Big_Post = c("Yes", "Yes", "Yes"),
+        Big_Pre = c("No", "No", "No", "Yes", "No", "No"),
+        Little_Pre = c("No", "No", "No", "No", "No", "No"),
+        Little_Post = c("No", "No", "No", "No", "No", "No"),
+        Big_Post = c("Yes", "Yes", "Yes", "No", "Yes", "No"),
+        Annual = c("No", "Yes", "Yes", "No", "No", "Yes"),
+        Notes = c(
+          "Big Post Likert; Annual has related Compared-to-before items under Wellness",
+          "Big Post keep-in-touch; Annual keep-in-touch when present",
+          "Big Post + Annual learn-more wording",
+          "PRE_OPENING_COLS / PRE_ADDITIONAL_COMMENTS_COL",
+          "POST_TODAY_SESSION_COLS / POST_IMPACT_STORY_COL",
+          "Annual takeaway / proud goal / impact story (tables on Annual hub)"
+        ),
         stringsAsFactors = FALSE
       )
       .style_variable_mapping_table(mapping)
@@ -6528,6 +6474,40 @@ server <- function(input, output, session) {
         )
     }, error = function(e) plotly_empty() %>% layout(title = paste("Error:", conditionMessage(e)), font = PLOT_FONT))
   })
+
+  output$impact_behavioral_pre_hist_summary <- renderUI({
+    big_pre_data <- filtered_big_pre()
+    if (nrow(big_pre_data) == 0) return(NULL)
+    bi <- calculate_behavioral_index(big_pre_data)
+    bi <- bi[is.finite(bi)]
+    if (!length(bi)) return(NULL)
+    deterministic_summary_box(
+      scores = bi, mode = "level",
+      null_value = 4, positive_threshold = 3,
+      scale_label = "(0-8 behaviors)",
+      headline_label = "Reported 4 or more past behaviors",
+      scope_text = scope_sentence(input),
+      accent = PRE_INDEX_COLOR
+    )
+  })
+
+  output$impact_behavioral_post_hist_summary <- renderUI({
+    big_post_data <- filtered_big_post()
+    if (nrow(big_post_data) == 0) return(NULL)
+    ai <- calculate_planned_actions_index(big_post_data)
+    if (is.matrix(ai) || is.array(ai)) ai <- as.vector(ai)
+    ai <- ai[is.finite(ai)]
+    if (!length(ai)) return(NULL)
+    deterministic_summary_box(
+      scores = ai, mode = "level",
+      null_value = 4, positive_threshold = 3,
+      scale_label = "(0-8 planned actions)",
+      headline_label = "Planning 4 or more actions",
+      scope_text = scope_sentence(input),
+      accent = POST_INDEX_COLOR
+    )
+  })
+
   output$big_pre_behavioral_index_hist <- renderPlotly({
     big_pre_data <- filtered_big_pre()
     if (nrow(big_pre_data) == 0) return(plotly_empty())
@@ -6823,6 +6803,7 @@ server <- function(input, output, session) {
   # ---- Reach 2: simple demographic charts from filtered_big_pre / filtered_big_post ----
   output$reach2_variable_mapping <- DT::renderDataTable({
     tryCatch({
+      # Live Master Annual Survey (2026) includes the same demographic block as Big Pre/Post
       mapping <- data.frame(
         Variable = c("Zip Code", "Age Group", "Race/Ethnicity", "Gender Identity", "Household Income",
                      "Education", "First-Gen College", "First-Gen U.S.", "Veteran Status", "Disability Status", "Neurodivergent"),
@@ -6830,6 +6811,7 @@ server <- function(input, output, session) {
         Little_Pre = c("Yes", rep("No", 10)),
         Little_Post = c("Yes", rep("No", 10)),
         Big_Post = rep("Yes", 11),
+        Annual = rep("Yes", 11),
         stringsAsFactors = FALSE
       )
       .style_variable_mapping_table(mapping)
@@ -6843,14 +6825,25 @@ server <- function(input, output, session) {
     if (is.null(x)) return(x)
     v <- trimws(as.character(x))
     v[v == ""] <- NA
-    # Any non-preset value (e.g. legacy "Asian", free-text "Vietnamese") is folded into "Other".
+    out <- rep(NA_character_, length(v))
     non_na <- !is.na(v)
-    v[non_na & !(v %in% RACE_PRESET_RESPONSES)] <- "Other"
-    v
+    if (!any(non_na)) return(out)
+    matched <- unname(RACE_KEY_TO_CANONICAL[.race_match_key(v[non_na])])
+    # Any non-preset value (e.g. legacy "Asian", free-text "Vietnamese") is folded into "Other".
+    matched[is.na(matched)] <- "Other"
+    out[non_na] <- matched
+    out
   }
   .reach2_col <- function(df, pattern) {
     if (is.null(df) || nrow(df) == 0) return(NULL)
     ccol <- grep(pattern, colnames(df), ignore.case = TRUE, value = TRUE)
+    # Annual form uses "FirstGeneration Status (U.S.)" (no hyphen after First)
+    if (length(ccol) == 0 && grepl("First.?Generation.*U\\.S", pattern, ignore.case = TRUE)) {
+      ccol <- grep("FirstGeneration Status.*U\\.S|First-Generation Status.*U\\.S", colnames(df), ignore.case = TRUE, value = TRUE)
+    }
+    if (length(ccol) == 0 && grepl("neurodivergent", pattern, ignore.case = TRUE)) {
+      ccol <- grep("neurodivergent", colnames(df), ignore.case = TRUE, value = TRUE)
+    }
     if (length(ccol) == 0) return(NULL)
     df[[ccol[1]]]
   }
@@ -6861,7 +6854,8 @@ server <- function(input, output, session) {
     for (lev in names(raw_tab)) if (lev %in% full_levels) out[lev] <- as.numeric(raw_tab[lev])
     out
   }
-  .reach2_bar <- function(tab, title, order_levels = NULL, y_max = NULL, x_display = NULL, show_n = TRUE, show_pct = FALSE) {
+  .reach2_bar <- function(tab, title, order_levels = NULL, y_max = NULL, x_display = NULL,
+                          show_n = TRUE, show_pct = FALSE, source = NULL) {
     if (is.null(tab) || length(tab) == 0) return(plotly_empty() %>% layout(title = paste0(title, " (no data)"), font = PLOT_FONT))
     if (!is.null(order_levels)) {
       ord <- intersect(order_levels, names(tab))
@@ -6876,6 +6870,20 @@ server <- function(input, output, session) {
     y <- as.numeric(tab)
     total <- sum(y, na.rm = TRUE)
     pct <- if (is.finite(total) && total > 0) round(100 * y / total, 1) else rep(0, length(y))
+    # Plain-English one-liner under the chart title (most common category).
+    eng_sub <- ""
+    if (is.finite(total) && total > 0 && length(y) > 0) {
+      i_max <- which.max(y)
+      top_lab <- as.character(x_axis[[i_max]])
+      click_hint <- if (!is.null(source)) " Click a bar for respondents." else ""
+      eng_sub <- sprintf(
+        "<br><span style='font-size:11px;color:#5f6369;font-weight:400'>Most common: %s (%s%% of %s).%s</span>",
+        htmltools::htmlEscape(top_lab),
+        format(pct[[i_max]], nsmall = 0),
+        format(as.integer(total), big.mark = ","),
+        click_hint
+      )
+    }
     show_bar_labs <- isTRUE(show_n) || isTRUE(show_pct)
     bar_text <- vapply(seq_along(y), function(i) {
       parts <- character(0)
@@ -6885,16 +6893,25 @@ server <- function(input, output, session) {
     }, character(1))
     if (!show_bar_labs) bar_text <- ""
     lab_line <- if (!is.null(x_display) && any(x_lab != x_axis, na.rm = TRUE)) x_lab else x_axis
-    hover_text <- paste0(lab_line, ": ", y, " (", pct, "%)")
+    hover_base <- paste0(lab_line, ": ", y, " (", pct, "%)")
+    hover_text <- if (!is.null(source)) paste0(hover_base, "<br>Click for respondents") else hover_base
     # Ensure category order is stable (use axis labels since those are what we're plotting)
     cat_order <- x_axis
-    p <- plot_ly(x = x_axis, y = y, type = "bar",
-                 text = bar_text, hovertext = hover_text, hoverinfo = "text",
-                 textposition = if (show_bar_labs) "outside" else "none",
-                 marker = list(color = REACH_PALETTE[seq_along(x_axis) %% length(REACH_PALETTE) + 1])) %>%
-      layout(title = title, font = PLOT_FONT,
-             xaxis = list(tickangle = -45, categoryorder = "array", categoryarray = cat_order),
-             margin = list(b = 100, t = 50))
+    # customdata keeps the chart category key (needed when axis shows short income labels)
+    p <- plot_ly(
+      x = x_axis, y = y, type = "bar",
+      customdata = x_lab,
+      source = if (!is.null(source)) source else "reach2_bar",
+      text = bar_text, hovertext = hover_text, hoverinfo = "text",
+      textposition = if (show_bar_labs) "outside" else "none",
+      marker = list(color = REACH_PALETTE[seq_along(x_axis) %% length(REACH_PALETTE) + 1])
+    ) %>%
+      layout(
+        title = list(text = paste0(title, eng_sub), font = PLOT_FONT),
+        font = PLOT_FONT,
+        xaxis = list(tickangle = -45, categoryorder = "array", categoryarray = cat_order),
+        margin = list(b = 100, t = if (nzchar(eng_sub)) 72 else 50)
+      )
     # Headroom for bar labels: two-line labels (N AND %) need extra room above the tallest bar.
     base_max <- if (!is.null(y_max) && is.finite(y_max) && y_max > 0) y_max else max(y, na.rm = TRUE)
     both_labs <- isTRUE(show_n) && isTRUE(show_pct)
@@ -6902,6 +6919,7 @@ server <- function(input, output, session) {
     headroom <- base_max * headroom_factor
     if (is.finite(headroom) && headroom > 0)
       p <- p %>% layout(yaxis = list(range = c(0, headroom), autorange = FALSE))
+    if (!is.null(source)) p <- p %>% plotly::event_register("plotly_click")
     p
   }
   # Split a multi-select cell on commas/semicolons that are NOT inside parentheses,
@@ -6952,38 +6970,75 @@ server <- function(input, output, session) {
   }
   pre_r2 <- reactive(filtered_big_pre())
   post_r2 <- reactive(filtered_big_post())
+  ann_r2 <- reactive(filtered_annual())
+  .reach2_demo_row_ui <- function(pre_id, post_id, ann_id, height = "280px") {
+    use_ann <- tryCatch(isTRUE(input$include_annual_in_reach), error = function(e) FALSE)
+    w <- if (isTRUE(use_ann)) 4L else 6L
+    cols <- list(
+      column(w, plotlyOutput(pre_id, height = height)),
+      column(w, plotlyOutput(post_id, height = height))
+    )
+    if (isTRUE(use_ann)) cols[[length(cols) + 1L]] <- column(w, plotlyOutput(ann_id, height = height))
+    do.call(fluidRow, cols)
+  }
+  output$reach2_age_row <- renderUI(.reach2_demo_row_ui("reach2_age_pre", "reach2_age_post", "reach2_age_annual", "280px"))
+  output$reach2_gender_row <- renderUI(.reach2_demo_row_ui("reach2_gender_pre", "reach2_gender_post", "reach2_gender_annual", "280px"))
+  output$reach2_income_row <- renderUI(.reach2_demo_row_ui("reach2_income_pre", "reach2_income_post", "reach2_income_annual", "280px"))
+  output$reach2_education_row <- renderUI(.reach2_demo_row_ui("reach2_education_pre", "reach2_education_post", "reach2_education_annual", "380px"))
+  output$reach2_race_row <- renderUI(.reach2_demo_row_ui("reach2_race_pre", "reach2_race_post", "reach2_race_annual", "460px"))
+
   reach2_levels_age <- reactive({
     if (!isTRUE(data_ready())) return(character(0))
     pre_v <- AGE_LEVELS_NORMALIZE(.reach2_col(pre_r2(), "Age Group"))
     post_v <- AGE_LEVELS_NORMALIZE(.reach2_col(post_r2(), "Age Group"))
-    .reach2_ordered_levels(AGE_LEVELS_CANONICAL, pre_v, post_v, youth_first = TRUE)
+    ann_v <- if (isTRUE(input$include_annual_in_reach)) {
+      AGE_LEVELS_NORMALIZE(.reach2_col(ann_r2(), "Age Group"))
+    } else NULL
+    .reach2_ordered_levels(AGE_LEVELS_CANONICAL, c(pre_v, ann_v), post_v, youth_first = TRUE)
   })
+  .reach2_gender_expand <- reactive({
+    tryCatch(isTRUE(input$reach2_gender_display_others), error = function(e) FALSE)
+  })
+  .reach2_gender_vec <- function(df) {
+    .gender_for_reach_chart(.reach2_col(df, "Gender Identity"), expand_others = .reach2_gender_expand())
+  }
   reach2_levels_gender <- reactive({
     if (!isTRUE(data_ready())) return(character(0))
-    pre_v <- .reach2_col(pre_r2(), "Gender Identity")
-    post_v <- .reach2_col(post_r2(), "Gender Identity")
-    sort(unique(c(na.omit(pre_v), na.omit(post_v))))
+    pre_v <- .reach2_gender_vec(pre_r2())
+    post_v <- .reach2_gender_vec(post_r2())
+    ann_v <- if (isTRUE(input$include_annual_in_reach)) .reach2_gender_vec(ann_r2()) else NULL
+    present <- unique(c(na.omit(pre_v), na.omit(post_v), na.omit(ann_v)))
+    form_first <- intersect(GENDER_FORM_OPTIONS, present)
+    extras <- sort(setdiff(present, GENDER_FORM_OPTIONS))
+    c(form_first, extras)
   })
   reach2_levels_income <- reactive({
     if (!isTRUE(data_ready())) return(character(0))
     pre_v <- .reach2_col(pre_r2(), "Household Income")
     post_v <- .reach2_col(post_r2(), "Household Income")
-    .reach2_ordered_levels(INCOME_ORDER, pre_v, post_v)
+    ann_v <- if (isTRUE(input$include_annual_in_reach)) {
+      .reach2_col(ann_r2(), "Household Income")
+    } else NULL
+    .reach2_ordered_levels(INCOME_ORDER, c(pre_v, ann_v), post_v)
   })
   reach2_levels_education <- reactive({
     if (!isTRUE(data_ready())) return(character(0))
     pre_v <- .reach2_norm_education(.reach2_col(pre_r2(), "highest level of education"))
     post_v <- .reach2_norm_education(.reach2_col(post_r2(), "highest level of education"))
-    .reach2_ordered_levels(EDUCATION_ORDER, pre_v, post_v)
+    ann_v <- if (isTRUE(input$include_annual_in_reach)) {
+      .reach2_norm_education(.reach2_col(ann_r2(), "highest level of education"))
+    } else NULL
+    .reach2_ordered_levels(EDUCATION_ORDER, c(pre_v, ann_v), post_v)
   })
   reach2_levels_race <- reactive({
     if (!isTRUE(data_ready())) return(character(0))
     pre_v <- .reach2_col(pre_r2(), "Race/Ethnicity")
     post_v <- .reach2_col(post_r2(), "Race/Ethnicity")
+    ann_v <- if (isTRUE(input$include_annual_in_reach)) .reach2_col(ann_r2(), "Race/Ethnicity") else NULL
     pre_flat <- .reach2_race_vec(pre_v)
     post_flat <- .reach2_race_vec(post_v)
-    present <- unique(c(pre_flat, post_flat))
-    # Canonical (survey form) order; any stragglers appended alphabetically (should only be "Other").
+    ann_flat <- .reach2_race_vec(ann_v)
+    present <- unique(c(pre_flat, post_flat, ann_flat))
     c(intersect(RACE_LEVELS_CANONICAL, present), sort(setdiff(present, RACE_LEVELS_CANONICAL)))
   })
   output$reach2_age_pre <- renderPlotly({
@@ -6999,7 +7054,7 @@ server <- function(input, output, session) {
       post_tab <- .reach2_tab_full_levels(post_raw, lvls)
       max(c(tab, post_tab), na.rm = TRUE)
     } else NULL
-    .reach2_bar(tab, "Age (Pre)", lvls, y_max, show_n = isTRUE(input$opt_show_n), show_pct = isTRUE(input$opt_show_pct))
+    .reach2_bar(tab, "Age (Pre)", lvls, y_max, show_n = isTRUE(input$opt_show_n), source = "reach2_age_pre", show_pct = isTRUE(input$opt_show_pct))
   })
   output$reach2_age_post <- renderPlotly({
     if (!isTRUE(data_ready())) return(plotly_empty() %>% layout(title = "Loading...", font = PLOT_FONT))
@@ -7014,42 +7069,40 @@ server <- function(input, output, session) {
       pre_tab <- .reach2_tab_full_levels(pre_raw, lvls)
       max(c(tab, pre_tab), na.rm = TRUE)
     } else NULL
-    .reach2_bar(tab, "Age (Post)", lvls, y_max, show_n = isTRUE(input$opt_show_n), show_pct = isTRUE(input$opt_show_pct))
+    .reach2_bar(tab, "Age (Post)", lvls, y_max, show_n = isTRUE(input$opt_show_n), source = "reach2_age_post", show_pct = isTRUE(input$opt_show_pct))
   })
   output$reach2_gender_pre <- renderPlotly({
     if (!isTRUE(data_ready())) return(plotly_empty() %>% layout(title = "Loading...", font = PLOT_FONT))
-    v <- .reach2_col(pre_r2(), "Gender Identity")
-    if (is.null(v)) return(plotly_empty() %>% layout(title = "Gender (Pre) — column not found", font = PLOT_FONT))
+    v <- .reach2_gender_vec(pre_r2())
+    if (is.null(v)) return(plotly_empty() %>% layout(title = "Gender (Pre) - column not found", font = PLOT_FONT))
     lvls <- reach2_levels_gender()
     if (length(lvls) == 0) return(plotly_empty() %>% layout(title = "Gender (Pre) (no levels)", font = PLOT_FONT))
     raw <- table(na.omit(v))
     tab <- .reach2_tab_full_levels(raw, lvls)
     y_max <- if (isTRUE(input$opt_same_y)) {
-      post_raw <- table(na.omit(.reach2_col(post_r2(), "Gender Identity")))
-      post_tab <- .reach2_tab_full_levels(post_raw, lvls)
+      post_tab <- .reach2_tab_full_levels(table(na.omit(.reach2_gender_vec(post_r2()))), lvls)
       max(c(tab, post_tab), na.rm = TRUE)
     } else NULL
-    .reach2_bar(tab, "Gender (Pre)", lvls, y_max, show_n = isTRUE(input$opt_show_n), show_pct = isTRUE(input$opt_show_pct))
+    .reach2_bar(tab, "Gender (Pre)", lvls, y_max, show_n = isTRUE(input$opt_show_n), source = "reach2_gender_pre", show_pct = isTRUE(input$opt_show_pct))
   })
   output$reach2_gender_post <- renderPlotly({
     if (!isTRUE(data_ready())) return(plotly_empty() %>% layout(title = "Loading...", font = PLOT_FONT))
-    v <- .reach2_col(post_r2(), "Gender Identity")
-    if (is.null(v)) return(plotly_empty() %>% layout(title = "Gender (Post) — column not found", font = PLOT_FONT))
+    v <- .reach2_gender_vec(post_r2())
+    if (is.null(v)) return(plotly_empty() %>% layout(title = "Gender (Post) - column not found", font = PLOT_FONT))
     lvls <- reach2_levels_gender()
     if (length(lvls) == 0) return(plotly_empty() %>% layout(title = "Gender (Post) (no levels)", font = PLOT_FONT))
     raw <- table(na.omit(v))
     tab <- .reach2_tab_full_levels(raw, lvls)
     y_max <- if (isTRUE(input$opt_same_y)) {
-      pre_raw <- table(na.omit(.reach2_col(pre_r2(), "Gender Identity")))
-      pre_tab <- .reach2_tab_full_levels(pre_raw, lvls)
+      pre_tab <- .reach2_tab_full_levels(table(na.omit(.reach2_gender_vec(pre_r2()))), lvls)
       max(c(tab, pre_tab), na.rm = TRUE)
     } else NULL
-    .reach2_bar(tab, "Gender (Post)", lvls, y_max, show_n = isTRUE(input$opt_show_n), show_pct = isTRUE(input$opt_show_pct))
+    .reach2_bar(tab, "Gender (Post)", lvls, y_max, show_n = isTRUE(input$opt_show_n), source = "reach2_gender_post", show_pct = isTRUE(input$opt_show_pct))
   })
   output$reach2_income_pre <- renderPlotly({
     if (!isTRUE(data_ready())) return(plotly_empty() %>% layout(title = "Loading...", font = PLOT_FONT))
     v <- .reach2_col(pre_r2(), "Household Income")
-    if (is.null(v)) return(plotly_empty() %>% layout(title = "Household Income (Pre) — column not found", font = PLOT_FONT))
+    if (is.null(v)) return(plotly_empty() %>% layout(title = "Household Income (Pre) - column not found", font = PLOT_FONT))
     lvls <- reach2_levels_income()
     if (length(lvls) == 0) return(plotly_empty() %>% layout(title = "Household Income (Pre) (no levels)", font = PLOT_FONT))
     raw <- table(na.omit(v))
@@ -7060,12 +7113,12 @@ server <- function(input, output, session) {
       max(c(tab, post_tab), na.rm = TRUE)
     } else NULL
     .reach2_bar(tab, "Household Income (Pre)", lvls, y_max, x_display = INCOME_SHORT_LABELS,
-                show_n = isTRUE(input$opt_show_n), show_pct = isTRUE(input$opt_show_pct))
+                show_n = isTRUE(input$opt_show_n), show_pct = isTRUE(input$opt_show_pct), source = "reach2_income_pre")
   })
   output$reach2_income_post <- renderPlotly({
     if (!isTRUE(data_ready())) return(plotly_empty() %>% layout(title = "Loading...", font = PLOT_FONT))
     v <- .reach2_col(post_r2(), "Household Income")
-    if (is.null(v)) return(plotly_empty() %>% layout(title = "Household Income (Post) — column not found", font = PLOT_FONT))
+    if (is.null(v)) return(plotly_empty() %>% layout(title = "Household Income (Post) - column not found", font = PLOT_FONT))
     lvls <- reach2_levels_income()
     if (length(lvls) == 0) return(plotly_empty() %>% layout(title = "Household Income (Post) (no levels)", font = PLOT_FONT))
     raw <- table(na.omit(v))
@@ -7076,7 +7129,7 @@ server <- function(input, output, session) {
       max(c(tab, pre_tab), na.rm = TRUE)
     } else NULL
     .reach2_bar(tab, "Household Income (Post)", lvls, y_max, x_display = INCOME_SHORT_LABELS,
-                show_n = isTRUE(input$opt_show_n), show_pct = isTRUE(input$opt_show_pct))
+                show_n = isTRUE(input$opt_show_n), show_pct = isTRUE(input$opt_show_pct), source = "reach2_income_post")
   })
   output$reach2_education_pre <- renderPlotly({
     if (!isTRUE(data_ready())) return(plotly_empty() %>% layout(title = "Loading...", font = PLOT_FONT))
@@ -7092,7 +7145,7 @@ server <- function(input, output, session) {
       post_tab <- .reach2_tab_full_levels(post_raw, lvls)
       max(c(tab, post_tab), na.rm = TRUE)
     } else NULL
-    .reach2_bar(tab, "Education (Pre)", lvls, y_max, show_n = isTRUE(input$opt_show_n), show_pct = isTRUE(input$opt_show_pct))
+    .reach2_bar(tab, "Education (Pre)", lvls, y_max, show_n = isTRUE(input$opt_show_n), source = "reach2_education_pre", show_pct = isTRUE(input$opt_show_pct))
   })
   output$reach2_education_post <- renderPlotly({
     if (!isTRUE(data_ready())) return(plotly_empty() %>% layout(title = "Loading...", font = PLOT_FONT))
@@ -7108,7 +7161,7 @@ server <- function(input, output, session) {
       pre_tab <- .reach2_tab_full_levels(pre_raw, lvls)
       max(c(tab, pre_tab), na.rm = TRUE)
     } else NULL
-    .reach2_bar(tab, "Education (Post)", lvls, y_max, show_n = isTRUE(input$opt_show_n), show_pct = isTRUE(input$opt_show_pct))
+    .reach2_bar(tab, "Education (Post)", lvls, y_max, show_n = isTRUE(input$opt_show_n), source = "reach2_education_post", show_pct = isTRUE(input$opt_show_pct))
   })
   output$reach2_race_pre <- renderPlotly({
     if (!isTRUE(data_ready())) return(plotly_empty() %>% layout(title = "Loading...", font = PLOT_FONT))
@@ -7124,7 +7177,7 @@ server <- function(input, output, session) {
       post_tab <- .reach2_tab_full_levels(table(post_flat), lvls)
       max(c(tab, post_tab), na.rm = TRUE)
     } else NULL
-    .reach2_bar(tab, "Race/Ethnicity (Pre)", lvls, y_max, show_n = isTRUE(input$opt_show_n), show_pct = isTRUE(input$opt_show_pct))
+    .reach2_bar(tab, "Race/Ethnicity (Pre)", lvls, y_max, show_n = isTRUE(input$opt_show_n), source = "reach2_race_pre", show_pct = isTRUE(input$opt_show_pct))
   })
   output$reach2_race_post <- renderPlotly({
     if (!isTRUE(data_ready())) return(plotly_empty() %>% layout(title = "Loading...", font = PLOT_FONT))
@@ -7140,8 +7193,249 @@ server <- function(input, output, session) {
       pre_tab <- .reach2_tab_full_levels(table(pre_flat), lvls)
       max(c(tab, pre_tab), na.rm = TRUE)
     } else NULL
-    .reach2_bar(tab, "Race/Ethnicity (Post)", lvls, y_max, show_n = isTRUE(input$opt_show_n), show_pct = isTRUE(input$opt_show_pct))
+    .reach2_bar(tab, "Race/Ethnicity (Post)", lvls, y_max, show_n = isTRUE(input$opt_show_n), source = "reach2_race_post", show_pct = isTRUE(input$opt_show_pct))
   })
+  output$reach2_age_annual <- renderPlotly({
+    if (!isTRUE(data_ready())) return(plotly_empty() %>% layout(title = "Loading...", font = PLOT_FONT))
+    if (!isTRUE(input$include_annual_in_reach)) return(plotly_empty() %>% layout(title = "Age (Annual)", font = PLOT_FONT))
+    v <- AGE_LEVELS_NORMALIZE(.reach2_col(ann_r2(), "Age Group"))
+    if (is.null(v)) return(plotly_empty() %>% layout(title = "Age (Annual) — column not found", font = PLOT_FONT))
+    lvls <- reach2_levels_age()
+    if (length(lvls) == 0) return(plotly_empty() %>% layout(title = "Age (Annual) (no levels)", font = PLOT_FONT))
+    tab <- .reach2_tab_full_levels(table(na.omit(v)), lvls)
+    y_max <- if (isTRUE(input$opt_same_y)) {
+      pre_tab <- .reach2_tab_full_levels(table(na.omit(AGE_LEVELS_NORMALIZE(.reach2_col(pre_r2(), "Age Group")))), lvls)
+      post_tab <- .reach2_tab_full_levels(table(na.omit(AGE_LEVELS_NORMALIZE(.reach2_col(post_r2(), "Age Group")))), lvls)
+      max(c(tab, pre_tab, post_tab), na.rm = TRUE)
+    } else NULL
+    .reach2_bar(tab, "Age (Annual)", lvls, y_max, show_n = isTRUE(input$opt_show_n), source = "reach2_age_annual", show_pct = isTRUE(input$opt_show_pct))
+  })
+  output$reach2_gender_annual <- renderPlotly({
+    if (!isTRUE(data_ready())) return(plotly_empty() %>% layout(title = "Loading...", font = PLOT_FONT))
+    if (!isTRUE(input$include_annual_in_reach)) return(plotly_empty() %>% layout(title = "Gender (Annual)", font = PLOT_FONT))
+    v <- .reach2_gender_vec(ann_r2())
+    if (is.null(v)) return(plotly_empty() %>% layout(title = "Gender (Annual) - column not found", font = PLOT_FONT))
+    lvls <- reach2_levels_gender()
+    if (length(lvls) == 0) return(plotly_empty() %>% layout(title = "Gender (Annual) (no levels)", font = PLOT_FONT))
+    tab <- .reach2_tab_full_levels(table(na.omit(v)), lvls)
+    y_max <- if (isTRUE(input$opt_same_y)) {
+      pre_tab <- .reach2_tab_full_levels(table(na.omit(.reach2_gender_vec(pre_r2()))), lvls)
+      post_tab <- .reach2_tab_full_levels(table(na.omit(.reach2_gender_vec(post_r2()))), lvls)
+      max(c(tab, pre_tab, post_tab), na.rm = TRUE)
+    } else NULL
+    .reach2_bar(tab, "Gender (Annual)", lvls, y_max, show_n = isTRUE(input$opt_show_n), source = "reach2_gender_annual", show_pct = isTRUE(input$opt_show_pct))
+  })
+  output$reach2_income_annual <- renderPlotly({
+    if (!isTRUE(data_ready())) return(plotly_empty() %>% layout(title = "Loading...", font = PLOT_FONT))
+    if (!isTRUE(input$include_annual_in_reach)) return(plotly_empty() %>% layout(title = "Household Income (Annual)", font = PLOT_FONT))
+    v <- .reach2_col(ann_r2(), "Household Income")
+    if (is.null(v)) return(plotly_empty() %>% layout(title = "Household Income (Annual) - column not found", font = PLOT_FONT))
+    lvls <- reach2_levels_income()
+    if (length(lvls) == 0) return(plotly_empty() %>% layout(title = "Household Income (Annual) (no levels)", font = PLOT_FONT))
+    tab <- .reach2_tab_full_levels(table(na.omit(v)), lvls)
+    y_max <- if (isTRUE(input$opt_same_y)) {
+      pre_tab <- .reach2_tab_full_levels(table(na.omit(.reach2_col(pre_r2(), "Household Income"))), lvls)
+      post_tab <- .reach2_tab_full_levels(table(na.omit(.reach2_col(post_r2(), "Household Income"))), lvls)
+      max(c(tab, pre_tab, post_tab), na.rm = TRUE)
+    } else NULL
+    .reach2_bar(tab, "Household Income (Annual)", lvls, y_max, x_display = INCOME_SHORT_LABELS,
+                show_n = isTRUE(input$opt_show_n), show_pct = isTRUE(input$opt_show_pct), source = "reach2_income_annual")
+  })
+  output$reach2_education_annual <- renderPlotly({
+    if (!isTRUE(data_ready())) return(plotly_empty() %>% layout(title = "Loading...", font = PLOT_FONT))
+    if (!isTRUE(input$include_annual_in_reach)) return(plotly_empty() %>% layout(title = "Education (Annual)", font = PLOT_FONT))
+    v <- .reach2_col(ann_r2(), "highest level of education")
+    if (is.null(v)) return(plotly_empty() %>% layout(title = "Education (Annual) — column not found", font = PLOT_FONT))
+    lvls <- reach2_levels_education()
+    if (length(lvls) == 0) return(plotly_empty() %>% layout(title = "Education (Annual) (no levels)", font = PLOT_FONT))
+    v <- .reach2_norm_education(v)
+    tab <- .reach2_tab_full_levels(table(na.omit(v)), lvls)
+    y_max <- if (isTRUE(input$opt_same_y)) {
+      pre_tab <- .reach2_tab_full_levels(table(na.omit(.reach2_norm_education(.reach2_col(pre_r2(), "highest level of education")))), lvls)
+      post_tab <- .reach2_tab_full_levels(table(na.omit(.reach2_norm_education(.reach2_col(post_r2(), "highest level of education")))), lvls)
+      max(c(tab, pre_tab, post_tab), na.rm = TRUE)
+    } else NULL
+    .reach2_bar(tab, "Education (Annual)", lvls, y_max, show_n = isTRUE(input$opt_show_n), source = "reach2_education_annual", show_pct = isTRUE(input$opt_show_pct))
+  })
+  output$reach2_race_annual <- renderPlotly({
+    if (!isTRUE(data_ready())) return(plotly_empty() %>% layout(title = "Loading...", font = PLOT_FONT))
+    if (!isTRUE(input$include_annual_in_reach)) return(plotly_empty() %>% layout(title = "Race (Annual)", font = PLOT_FONT))
+    v <- .reach2_col(ann_r2(), "Race/Ethnicity")
+    if (is.null(v)) {
+      return(plotly_empty() %>% layout(
+        title = "Race/Ethnicity (Annual) — not on Annual form",
+        font = PLOT_FONT
+      ))
+    }
+    lvls <- reach2_levels_race()
+    flat <- .reach2_race_vec(v)
+    if (length(lvls) == 0 && length(flat) == 0) {
+      return(plotly_empty() %>% layout(title = "Race/Ethnicity (Annual) (no data)", font = PLOT_FONT))
+    }
+    raw <- table(flat)
+    tab <- if (length(lvls) > 0) .reach2_tab_full_levels(raw, lvls) else raw
+    y_max <- if (isTRUE(input$opt_same_y) && length(lvls) > 0) {
+      pre_tab <- .reach2_tab_full_levels(table(.reach2_race_vec(.reach2_col(pre_r2(), "Race/Ethnicity"))), lvls)
+      post_tab <- .reach2_tab_full_levels(table(.reach2_race_vec(.reach2_col(post_r2(), "Race/Ethnicity"))), lvls)
+      max(c(tab, pre_tab, post_tab), na.rm = TRUE)
+    } else NULL
+    .reach2_bar(tab, "Race/Ethnicity (Annual)", lvls, y_max, show_n = isTRUE(input$opt_show_n), show_pct = isTRUE(input$opt_show_pct), source = "reach2_race_annual")
+  })
+
+  # ---- Reach bar click -> respondent modal (wave of clicked chart only) ----
+  reach_drill_rows <- reactiveVal(NULL)
+  reach_drill_title <- reactiveVal("")
+  user_journey_active_id <- reactiveVal(NULL)
+
+  .reach_drill_wave_df <- function(wave) {
+    if (identical(wave, "pre")) return(pre_r2())
+    if (identical(wave, "post")) return(post_r2())
+    if (identical(wave, "annual")) return(ann_r2())
+    data.frame()
+  }
+
+  .reach_drill_filter_df <- function(df, var, category) {
+    if (is.null(df) || !nrow(df)) return(df)
+    cat <- as.character(category)
+    if (identical(var, "age")) {
+      v <- AGE_LEVELS_NORMALIZE(.reach2_col(df, "Age Group"))
+      keep <- !is.na(v) & as.character(v) == cat
+      return(list(df = df[keep, , drop = FALSE], raw = as.character(v[keep])))
+    }
+    if (identical(var, "gender")) {
+      v <- .reach2_gender_vec(df)
+      keep <- !is.na(v) & as.character(v) == cat
+      raw_col <- .reach2_col(df, "Gender Identity")
+      return(list(df = df[keep, , drop = FALSE], raw = as.character(raw_col[keep])))
+    }
+    if (identical(var, "income")) {
+      v <- as.character(.reach2_col(df, "Household Income"))
+      keep <- !is.na(v) & v == cat
+      return(list(df = df[keep, , drop = FALSE], raw = v[keep]))
+    }
+    if (identical(var, "education")) {
+      raw_col <- .reach2_col(df, "highest level of education")
+      v <- .reach2_norm_education(raw_col)
+      keep <- !is.na(v) & as.character(v) == cat
+      return(list(df = df[keep, , drop = FALSE], raw = as.character(raw_col[keep])))
+    }
+    if (identical(var, "race")) {
+      raw_col <- .reach2_col(df, "Race/Ethnicity")
+      keep <- vapply(as.character(raw_col), function(cell) {
+        if (is.na(cell) || !nzchar(trimws(cell))) return(FALSE)
+        cat %in% .reach2_race_vec(cell)
+      }, logical(1))
+      return(list(df = df[keep, , drop = FALSE], raw = as.character(raw_col[keep])))
+    }
+    list(df = df[0, , drop = FALSE], raw = character(0))
+  }
+
+  .reach_open_drill_modal <- function(src) {
+    parts <- strsplit(src, "_", fixed = TRUE)[[1]]
+    if (length(parts) < 3) return()
+    wave <- parts[length(parts)]
+    var <- paste(parts[2:(length(parts) - 1)], collapse = "_")
+    ev <- tryCatch(plotly::event_data("plotly_click", source = src), error = function(e) NULL)
+    if (is.null(ev) || !nrow(ev)) return()
+    category <- {
+      cd <- if ("customdata" %in% names(ev)) ev$customdata else NULL
+      if (!is.null(cd) && length(unlist(cd))) as.character(unlist(cd)[[1]])
+      else as.character(ev$x[[1]])
+    }
+    if (!nzchar(category) || identical(category, "NULL")) return()
+    df <- .reach_drill_wave_df(wave)
+    matched <- .reach_drill_filter_df(df, var, category)
+    tbl <- build_reach_drill_table(
+      matched$df,
+      wave = tools::toTitleCase(wave),
+      chart_value = category,
+      raw_response = matched$raw
+    )
+    reach_drill_rows(tbl)
+    reach_drill_title(paste0(
+      tools::toTitleCase(var), " / ", tools::toTitleCase(wave), ": ", category
+    ))
+    shiny::showModal(shiny::modalDialog(
+      title = paste0("Respondents — ", reach_drill_title()),
+      size = "l",
+      easyClose = TRUE,
+      shiny::p(
+        style = "font-size: 12px; color: #5f6369;",
+        "People in this bar for the clicked wave only (current sidebar filters). ",
+        "Select a row, then open User Journey for that person's full history."
+      ),
+      DT::DTOutput("reach_drill_table"),
+      footer = shiny::tagList(
+        shiny::actionButton("reach_drill_open_journey", "Open selected in User Journey", class = "btn-primary"),
+        shiny::modalButton("Close")
+      )
+    ))
+  }
+
+  for (.reach_src in c(
+    "reach2_age_pre", "reach2_age_post", "reach2_age_annual",
+    "reach2_gender_pre", "reach2_gender_post", "reach2_gender_annual",
+    "reach2_income_pre", "reach2_income_post", "reach2_income_annual",
+    "reach2_education_pre", "reach2_education_post", "reach2_education_annual",
+    "reach2_race_pre", "reach2_race_post", "reach2_race_annual"
+  )) {
+    local({
+      src <- .reach_src
+      observeEvent(
+        plotly::event_data("plotly_click", source = src),
+        {
+          .reach_open_drill_modal(src)
+        },
+        ignoreNULL = TRUE,
+        ignoreInit = TRUE
+      )
+    })
+  }
+
+  output$reach_drill_table <- DT::renderDataTable({
+    tbl <- reach_drill_rows()
+    if (is.null(tbl) || !nrow(tbl)) {
+      return(DT::datatable(
+        data.frame(Message = "No rows"),
+        rownames = FALSE, options = list(dom = "t")
+      ))
+    }
+    DT::datatable(
+      tbl,
+      selection = "single",
+      rownames = FALSE,
+      options = list(pageLength = 10, scrollX = TRUE)
+    )
+  })
+
+  observeEvent(input$reach_drill_open_journey, {
+    tbl <- reach_drill_rows()
+    sel <- input$reach_drill_table_rows_selected
+    if (is.null(tbl) || !nrow(tbl) || !"respondent_id" %in% names(tbl)) {
+      showNotification("No respondent table available.", type = "warning")
+      return()
+    }
+    if (!length(sel)) {
+      showNotification("Select a respondent row first.", type = "warning")
+      return()
+    }
+    rid <- trimws(as.character(tbl$respondent_id[sel[[1]]]))
+    if (!nzchar(rid) || is.na(rid)) {
+      showNotification("Selected row has no respondent_id.", type = "warning")
+      return()
+    }
+    removeModal()
+    updateTabsetPanel(session, "impact_tabs", selected = "user_journey")
+    updateTextInput(session, "user_journey_id", value = rid)
+    user_journey_active_id(rid)
+  })
+
+  register_user_journey_outputs(
+    input, output, session,
+    master_pre, master_post, master_annual,
+    program_manager_for_typing,
+    user_journey_active_id
+  )
 
   # Reach 2 cross-tab heatmaps (Big Pre only; brand color scale)
   .reach2_crosstab_heatmap <- function(df, pattern1, pattern2, title, order1 = NULL, order2 = NULL, expand2 = FALSE) {
@@ -7844,7 +8138,7 @@ server <- function(input, output, session) {
       if (nrow(big_post_data) == 0) return(plotly_empty())
       col <- grep("How likely are you to recommend", colnames(big_post_data), ignore.case = TRUE, value = TRUE)
       if (length(col) == 0) return(plotly_empty())
-      rec_vals <- as.numeric(big_post_data[[col[1]]])
+      rec_vals <- .coerce_numeric_vec(big_post_data[[col[1]]])
       rec_vals <- rec_vals[is.finite(rec_vals) & rec_vals >= 1 & rec_vals <= 10]
       if (length(rec_vals) == 0) return(plotly_empty())
       bf <- .satisfaction_bar_label_flags()
@@ -7878,8 +8172,8 @@ server <- function(input, output, session) {
     col <- grep("How satisfied (are you with your|were you with today's).*5 Buckets", colnames(big_post_data), ignore.case = TRUE, value = TRUE)
     if (length(col) == 0) return(plotly_empty())
     
-    sat_vals <- as.numeric(big_post_data[[col[1]]])
-    sat_vals <- sat_vals[!is.na(sat_vals)]
+    sat_vals <- .coerce_numeric_vec(big_post_data[[col[1]]])
+    sat_vals <- sat_vals[is.finite(sat_vals)]
     if (length(sat_vals) == 0) return(plotly_empty())
     
     # Count by rating
@@ -7900,8 +8194,8 @@ server <- function(input, output, session) {
     col <- grep("How satisfied are you with the quality of your facilitator", colnames(big_post_data), ignore.case = TRUE, value = TRUE)
     if (length(col) == 0) return(plotly_empty())
     
-    sat_vals <- as.numeric(big_post_data[[col[1]]])
-    sat_vals <- sat_vals[!is.na(sat_vals)]
+    sat_vals <- .coerce_numeric_vec(big_post_data[[col[1]]])
+    sat_vals <- sat_vals[is.finite(sat_vals)]
     if (length(sat_vals) == 0) return(plotly_empty())
     
     counts <- table(factor(sat_vals, levels = 1:5, ordered = TRUE))
@@ -7922,7 +8216,7 @@ server <- function(input, output, session) {
     col <- grep("My facilitator was.*Knowledgeable", colnames(big_post_data), ignore.case = TRUE, value = TRUE)
     if (length(col) == 0) return(plotly_empty())
     
-    data <- get_ordered_likert_table(big_post_data[[col[1]]])
+    data <- get_ordered_likert_table(.coerce_atomic_chr(big_post_data[[col[1]]]))
     p <- plot_ly(x = names(data), y = as.numeric(data), type = "bar",
                  marker = list(color = "#5c2f92")) %>%
       layout(title = "Facilitator: Knowledgeable", 
@@ -7939,7 +8233,7 @@ server <- function(input, output, session) {
     col <- grep("My facilitator was.*Interactive", colnames(big_post_data), ignore.case = TRUE, value = TRUE)
     if (length(col) == 0) return(plotly_empty())
     
-    data <- get_ordered_likert_table(big_post_data[[col[1]]])
+    data <- get_ordered_likert_table(.coerce_atomic_chr(big_post_data[[col[1]]]))
     p <- plot_ly(x = names(data), y = as.numeric(data), type = "bar",
                  marker = list(color = "#82c341")) %>%
       layout(title = "Facilitator: Interactive", 
@@ -7956,7 +8250,7 @@ server <- function(input, output, session) {
     col <- grep("My facilitator was.*Relatable", colnames(big_post_data), ignore.case = TRUE, value = TRUE)
     if (length(col) == 0) return(plotly_empty())
     
-    data <- get_ordered_likert_table(big_post_data[[col[1]]])
+    data <- get_ordered_likert_table(.coerce_atomic_chr(big_post_data[[col[1]]]))
     p <- plot_ly(x = names(data), y = as.numeric(data), type = "bar",
                  marker = list(color = "#f58220")) %>%
       layout(title = "Facilitator: Relatable", 
@@ -7973,7 +8267,7 @@ server <- function(input, output, session) {
     col <- grep("My facilitator was.*Engaging", colnames(big_post_data), ignore.case = TRUE, value = TRUE)
     if (length(col) == 0) return(plotly_empty())
     
-    data <- get_ordered_likert_table(big_post_data[[col[1]]])
+    data <- get_ordered_likert_table(.coerce_atomic_chr(big_post_data[[col[1]]]))
     p <- plot_ly(x = names(data), y = as.numeric(data), type = "bar",
                  marker = list(color = "#0076be")) %>%
       layout(title = "Facilitator: Engaging", 
@@ -7990,7 +8284,7 @@ server <- function(input, output, session) {
       if (!POST_SESSION_SATISFACTION_COL %in% colnames(big_post_data)) {
         return(plotly_empty() %>% layout(title = "Session satisfaction column not found", font = PLOT_FONT))
       }
-      q <- as.numeric(big_post_data[[POST_SESSION_SATISFACTION_COL]])
+      q <- .coerce_numeric_vec(big_post_data[[POST_SESSION_SATISFACTION_COL]])
       q <- q[is.finite(q) & q >= 1 & q <= SESSION_SATISFACTION_MAX]
       if (length(q) == 0) return(plotly_empty())
       bf <- .satisfaction_bar_label_flags()
@@ -8020,14 +8314,16 @@ server <- function(input, output, session) {
   output$satisfaction_session_summary <- renderUI({
     d <- filtered_big_post()
     if (nrow(d) == 0 || !POST_SESSION_SATISFACTION_COL %in% colnames(d)) return(NULL)
-    q <- as.numeric(d[[POST_SESSION_SATISFACTION_COL]])
+    q <- .coerce_numeric_vec(d[[POST_SESSION_SATISFACTION_COL]])
     q <- q[is.finite(q) & q >= 1 & q <= SESSION_SATISFACTION_MAX]
     deterministic_summary_box(
       scores = q, mode = "level",
       null_value = (1 + SESSION_SATISFACTION_MAX) / 2,
       positive_threshold = SESSION_SATISFACTION_MAX - 2,
       scale_label = paste0("(1\u2013", SESSION_SATISFACTION_MAX, ")"),
-      headline_label = paste0("Top-2 satisfaction (", SESSION_SATISFACTION_MAX - 1, "\u2013", SESSION_SATISFACTION_MAX, " of ", SESSION_SATISFACTION_MAX, ")"),
+      headline_label = paste0(
+        "Highly satisfied (score ", SESSION_SATISFACTION_MAX - 1, " or ", SESSION_SATISFACTION_MAX, ")"
+      ),
       scope_text = scope_sentence(input)
     )
   })
@@ -8037,13 +8333,13 @@ server <- function(input, output, session) {
     if (nrow(d) == 0) return(NULL)
     col <- grep("How likely are you to recommend", colnames(d), ignore.case = TRUE, value = TRUE)
     if (length(col) == 0) return(NULL)
-    r <- as.numeric(d[[col[1]]])
+    r <- .coerce_numeric_vec(d[[col[1]]])
     r <- r[is.finite(r) & r >= 1 & r <= 10]
     deterministic_summary_box(
       scores = r, mode = "level",
       null_value = 5.5, positive_threshold = 8,
       scale_label = "(1\u201310)",
-      headline_label = "Promoters (9\u201310)",
+      headline_label = "Very likely to recommend (score 9 or 10)",
       scope_text = scope_sentence(input)
     )
   })
@@ -9709,7 +10005,7 @@ server <- function(input, output, session) {
   })
   .get_behavioral_paired <- function() {
     big_pre <- filtered_big_pre()
-    big_post <- filtered_big_post()
+    big_post <- filtered_big_post_only()
     if (nrow(big_pre) == 0 || nrow(big_post) == 0) return(NULL)
     if (!"respondent_id" %in% colnames(big_pre) || !"respondent_id" %in% colnames(big_post)) return(NULL)
     pre_idx <- calculate_behavioral_index(big_pre)
@@ -9717,7 +10013,7 @@ server <- function(input, output, session) {
     if (is.matrix(post_idx) || is.array(post_idx)) post_idx <- as.vector(post_idx)
     pre_df <- data.frame(respondent_id = big_pre$respondent_id, pre = pre_idx, stringsAsFactors = FALSE)
     post_df <- data.frame(respondent_id = big_post$respondent_id, post = post_idx, stringsAsFactors = FALSE)
-    valid_id <- function(ids) !is.na(ids) & nzchar(trimws(ids)) & !grepl("^ANON#", ids)
+    valid_id <- function(ids) !is.na(ids) & nzchar(trimws(ids)) & !grepl("^ANON", ids, ignore.case = TRUE)
     pre_df <- pre_df[valid_id(pre_df$respondent_id) & !is.na(pre_df$pre), , drop = FALSE]
     post_df <- post_df[valid_id(post_df$respondent_id) & !is.na(post_df$post), , drop = FALSE]
     paired <- merge(pre_df, post_df, by = "respondent_id")
@@ -10635,7 +10931,7 @@ server <- function(input, output, session) {
           # Get recommendation
           recommend_col <- grep("likely.*recommend", colnames(post_with_session), ignore.case = TRUE, value = TRUE)
           if (length(recommend_col) > 0) {
-            recommend_vals <- as.numeric(post_with_session[[recommend_col[1]]])
+            recommend_vals <- .coerce_numeric_vec(post_with_session[[recommend_col[1]]])
             recommend_vals <- recommend_vals[!is.na(recommend_vals)]
             avg_recommend <- if (length(recommend_vals) > 0) round(mean(recommend_vals), 2) else NA
           }
@@ -10643,7 +10939,7 @@ server <- function(input, output, session) {
           # Get satisfaction
           satisfaction_col <- grep("satisfied.*5 Buckets experience", colnames(post_with_session), ignore.case = TRUE, value = TRUE)
           if (length(satisfaction_col) > 0) {
-            satisfaction_vals <- as.numeric(post_with_session[[satisfaction_col[1]]])
+            satisfaction_vals <- .coerce_numeric_vec(post_with_session[[satisfaction_col[1]]])
             satisfaction_vals <- satisfaction_vals[!is.na(satisfaction_vals)]
             avg_satisfaction <- if (length(satisfaction_vals) > 0) round(mean(satisfaction_vals), 2) else NA
           }

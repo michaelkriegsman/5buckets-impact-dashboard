@@ -9,4 +9,9 @@ if (basename(getwd()) != "Impact Dashboard") {
   }
 }
 
+# Local secrets (gitignored): RESPONDENT_ID_SALT hashes Annual emails to match Pre/Post IDs
+if (file.exists(".Renviron")) {
+  readRenviron(".Renviron")
+}
+
 shiny::runApp("app.R", port = 3838)

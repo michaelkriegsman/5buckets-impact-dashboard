@@ -19,7 +19,18 @@ get_ordered_likert_table <- function(x) {
   levels <- c("Strongly Disagree", "Disagree", "Agree", "Strongly Agree")
   empty_tbl <- structure(rep(0L, length(levels)), names = levels, class = "table")
   if (is.null(x) || length(x) == 0) return(empty_tbl)
-  x <- x[!is.na(x) & as.character(x) != ""]
+  # googlesheets4 can return list-columns; flatten to atomic character first
+  if (is.list(x) && !is.data.frame(x)) {
+    x <- vapply(seq_along(x), function(i) {
+      xi <- x[[i]]
+      if (is.null(xi) || length(xi) == 0) return(NA_character_)
+      if (is.list(xi)) xi <- unlist(xi, recursive = TRUE, use.names = FALSE)
+      trimws(paste(as.character(xi), collapse = ", "))
+    }, character(1))
+  } else {
+    x <- trimws(as.character(x))
+  }
+  x <- x[!is.na(x) & nzchar(x)]
   if (length(x) == 0) return(empty_tbl)
   f <- factor(x, levels = levels, ordered = TRUE)
   if (all(is.na(f))) return(empty_tbl)

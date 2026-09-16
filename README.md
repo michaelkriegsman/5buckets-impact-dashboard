@@ -15,8 +15,10 @@
 >   secret env var `GOOGLE_SERVICE_ACCOUNT_KEY` (never committed).
 > - A login wall turns on only when `DASHBOARD_AUTH_PASSWORD` is set (it is, on the host). Local dev
 >   stays password-free because that var is unset locally. See top of `app.R`.
-> - The respondent-ID **salt is NOT in this repo** — it lives only in the Google Apps Script files,
->   so a public repo is safe.
+> - The respondent-ID **salt is NOT hardcoded in this repo**. Set env var `RESPONDENT_ID_SALT` to the
+>   same value as the Google Apps Script handlers (local `.Renviron`, gitignored; Connect Cloud secret
+>   for production). The dashboard uses it to hash Annual Survey emails into `respondent_id` for
+>   privacy-preserving Pre/Post/Annual matching.
 > - First Connect Cloud build installs ~124 R packages and can take 10–20 min (one time).
 
 Shiny web application for analyzing 5 Buckets workshop survey data.

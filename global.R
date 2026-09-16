@@ -100,6 +100,10 @@ MASTER_PRE_SHEET_NAME <- "Pre Submissions"
 MASTER_POST_SHEET_ID <- Sys.getenv("MASTER_POST_SHEET_ID", unset = "1nxVENReSAURQlXLdJ2eMcaLZ4NWYA4xNo7eTwp6EHWw")
 MASTER_POST_SHEET_NAME <- "Post Submissions"
 
+# Master Annual Survey (same workbook; tab name "Annual Survey", gid 1269296162)
+MASTER_ANNUAL_SHEET_ID <- Sys.getenv("MASTER_ANNUAL_SHEET_ID", unset = "1nxVENReSAURQlXLdJ2eMcaLZ4NWYA4xNo7eTwp6EHWw")
+MASTER_ANNUAL_SHEET_NAME <- Sys.getenv("MASTER_ANNUAL_SHEET_NAME", unset = "Annual Survey")
+
 # Program Manager Sheet (Workshops)
 # Feb 2026: Program Manager - Feb 2026
 PROGRAM_MANAGER_SHEET_ID <- Sys.getenv("PROGRAM_MANAGER_SHEET_ID", unset = "1aefJFVQtfYx2UCd5u9q1pl0raJXVzXaW8pKlzZRMXuQ")
@@ -118,6 +122,10 @@ MERCY_PROGRAM_MANAGER_SHEET_NAME <- Sys.getenv(
 # Google Sheets URLs (for hyperlinks)
 MASTER_PRE_URL <- paste0("https://docs.google.com/spreadsheets/d/", MASTER_PRE_SHEET_ID, "/edit")
 MASTER_POST_URL <- paste0("https://docs.google.com/spreadsheets/d/", MASTER_POST_SHEET_ID, "/edit")
+MASTER_ANNUAL_URL <- paste0(
+  "https://docs.google.com/spreadsheets/d/", MASTER_ANNUAL_SHEET_ID,
+  "/edit#gid=1269296162"
+)
 PROGRAM_MANAGER_URL <- paste0("https://docs.google.com/spreadsheets/d/", PROGRAM_MANAGER_SHEET_ID, "/edit")
 
 # ============================================================================
@@ -235,6 +243,25 @@ load_master_post <- function() {
     normalize_master_cols(d)
   }, error = function(e) {
     warning("Error loading Master Post data: ", e$message)
+    return(data.frame())
+  })
+}
+
+load_master_annual <- function() {
+  if (MASTER_ANNUAL_SHEET_ID == "") {
+    warning("MASTER_ANNUAL_SHEET_ID not set. Using empty data frame.")
+    return(data.frame())
+  }
+  tryCatch({
+    d <- read_sheet(MASTER_ANNUAL_SHEET_ID, sheet = MASTER_ANNUAL_SHEET_NAME)
+    d <- normalize_master_cols(d)
+    # Privacy-preserving IDs for longitudinal match (same salt as Pre/Post Apps Script)
+    if (exists("attach_respondent_ids_from_email", mode = "function")) {
+      d <- attach_respondent_ids_from_email(d, overwrite = TRUE)
+    }
+    d
+  }, error = function(e) {
+    warning("Error loading Master Annual Survey data: ", e$message)
     return(data.frame())
   })
 }

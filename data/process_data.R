@@ -94,14 +94,18 @@ prep_program_manager_session_join <- function(program_manager) {
 }
 
 # Short display for Responses by Series: one org mention; optional group if distinct; ASCII only.
+# Guard NA before nzchar()/!= — otherwise if(NA) crashes assign_series_keys and empties Overview series tables.
 series_display_label_short <- function(org_i, group_i, sis_val, sid_ctr, sid_str, singleton = FALSE) {
   org <- trimws(as.character(org_i))
+  if (length(org) == 0L || is.na(org) || !nzchar(org)) org <- "Unknown Organization"
   gr <- trimws(as.character(group_i))
-  if (singleton || is.na(sis_val)) {
-    if (nzchar(gr) && gr != org) return(paste0(org, " - ", gr, " (", sid_str, ")"))
+  if (length(gr) == 0L || is.na(gr)) gr <- ""
+  has_grp <- nzchar(gr) && !is.na(gr) && gr != org
+  if (isTRUE(singleton) || is.na(sis_val)) {
+    if (has_grp) return(paste0(org, " - ", gr, " (", sid_str, ")"))
     return(paste0(org, " (", sid_str, ")"))
   }
-  base <- if (nzchar(gr) && gr != org) paste0(org, " - ", gr) else org
+  base <- if (has_grp) paste0(org, " - ", gr) else org
   paste0(base, " | ", sis_val, "-part #", sid_ctr)
 }
 
