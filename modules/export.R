@@ -1,15 +1,11 @@
 # export.R — Phase 3 sidebar exports
 #
-# Four downloads:
-#   1. PDF report (human)           — current filters + export scope
-#   2. Report (.md for AI)          — hierarchical numeric + figure recipes
-#   3. Data Map (.md for AI)        — schema / relationships (filter-independent)
-#   4. Filtered data (CSV ZIP)      — respondent-level CSVs (PII stripped)
-#
-# PII (names, emails) stripped from data exports. Hashed respondent_id kept.
+# Primary product: one "Export for AI (ZIP)" with Report + Analyst always;
+# optional raw Pre/Post/Annual CSVs + Data Map via a single checkbox.
+# Human PDF 2-pager remains deferred.
 
 # -----------------------------------------------------------------------------
-# Section registry
+# Section registry (used for Analyst content; no longer a sidebar checkbox group)
 # -----------------------------------------------------------------------------
 
 EXPORT_SECTION_CHOICES <- c(
@@ -83,48 +79,38 @@ export_sidebar_ui <- function() {
     tags$span(class = "sidebar-card-label", "Export"),
     tags$p(
       style = "font-size: 11px; color: #6a6f75; margin: 0 0 10px;",
-      "Results, PDF, and data ZIP follow sidebar filters + section picks below. ",
-      "Data Map is the full schema (not filter-dependent)."
+      "One ZIP for secondary AI, scoped to current sidebar filters. ",
+      "Always includes Report + Analyst. Optionally add raw CSVs and Data Map."
     ),
-    tags$h5("Sections to include", style = "margin: 0 0 6px; color: #5c2f92; font-size: 12px;"),
-    checkboxGroupInput(
-      "export_sections",
-      label = NULL,
-      choices = EXPORT_SECTION_CHOICES,
-      selected = unname(EXPORT_SECTION_CHOICES)
+    checkboxInput(
+      "export_include_raw_and_map",
+      label = "Include raw data and Data Map",
+      value = TRUE
     ),
     helpText(
       style = "font-size: 11px; color: #6a6f75; margin-top: 0;",
-      "Results (md for AI) always includes numeric tables plus figure recipes/context so a secondary AI can recreate charts. ",
-      "Data ZIP is respondent-level CSVs only (no images)."
+      "Raw = pre.csv / post.csv / annual.csv (with Big/Little flags). ",
+      "Unchecked ZIP is Report + Analyst only."
     ),
     downloadButton(
-      "export_human_pdf",
-      "Report (PDF for humans)",
-      icon = icon("file-pdf"),
-      class = "btn-default",
-      style = "width: 100%; margin-bottom: 6px; white-space: normal;"
+      "export_ai_zip",
+      "Export for AI (ZIP)",
+      icon = icon("file-archive"),
+      class = "btn-primary",
+      style = "width: 100%; margin-bottom: 8px; white-space: normal;"
     ),
-    downloadButton(
-      "export_analysis_md",
-      "Results (md for AI)",
-      icon = icon("file-alt"),
-      class = "btn-default",
-      style = "width: 100%; margin-bottom: 6px; white-space: normal;"
+    # Human PDF deferred — future 2-pager with high-value % summaries / charts
+    tags$button(
+      type = "button",
+      class = "btn btn-default disabled",
+      style = "width: 100%; margin-bottom: 6px; white-space: normal; opacity: 0.65; cursor: not-allowed;",
+      disabled = "disabled",
+      icon("person-digging"),
+      " Report (PDF for humans) — unavailable"
     ),
-    downloadButton(
-      "export_data_map_md",
-      "Data Map (md for AI)",
-      icon = icon("book"),
-      class = "btn-default",
-      style = "width: 100%; margin-bottom: 6px; white-space: normal;"
-    ),
-    downloadButton(
-      "export_filtered_data_zip",
-      "Filtered data (CSV ZIP)",
-      icon = icon("database"),
-      class = "btn-default",
-      style = "width: 100%; margin-bottom: 0; white-space: normal;"
+    tags$p(
+      style = "font-size: 10px; color: #6a6f75; margin: -2px 0 0;",
+      "Future: short 2-pager for partners. Custom reports go through this ZIP → secondary AI."
     )
   )
 }
@@ -191,9 +177,12 @@ export_sidebar_ui <- function() {
 }
 
 .export_selected_sections <- function(input) {
-  sel <- tryCatch(input$export_sections, error = function(e) NULL)
-  if (is.null(sel) || !length(sel)) return(unname(EXPORT_SECTION_CHOICES))
-  intersect(as.character(sel), unname(EXPORT_SECTION_CHOICES))
+  # Section checkboxes removed — Analyst always includes the full registry.
+  unname(EXPORT_SECTION_CHOICES)
+}
+
+.export_include_raw_and_map <- function(input) {
+  tryCatch(isTRUE(input$export_include_raw_and_map), error = function(e) TRUE)
 }
 
 .export_include_figures <- function(input) {
@@ -1553,11 +1542,11 @@ build_report_markdown <- function(bundle) {
   section_ids <- names(sections)
 
   parts <- c(
-    "# 5 Buckets Impact Dashboard — Results (for AI)",
+    "# 5 Buckets Analyst File (for AI)",
     "",
-    "> Filter-scoped numeric export for a secondary AI. **Primary insight lanes:** Financial Wellness Pre↔Post,",
-    "> Behavioral Pre↔Post, Reach, then Satisfaction / Stories.",
-    "> Schema & scoring: pair with **Data Map (md for AI)**. Do not invent Likert maps or Big/Little rules.",
+    "> Deeper Analyst pack for a secondary AI. Partner-ready agree% / delivery / quotes: see **report_for_ai.md**.",
+    "> Filter-scoped. Schema & scoring: pair with **data_map.md** when included. Do not invent Likert maps or Big/Little rules.",
+    "> Word-frequency open-text is omitted — use Report quotes or raw open-text columns.",
     "",
     .export_filter_snapshot_md(bundle$snap),
     "## Export scope",
@@ -1578,6 +1567,13 @@ build_report_markdown <- function(bundle) {
 
   for (sid in ordered_ids) {
     sec <- sections[[sid]]
+    # Trim: drop word_freq from learning (quotes live in Report)
+    if (identical(sid, "learning") && length(sec$blocks)) {
+      sec$blocks <- Filter(function(b) {
+        !identical(b$id %||% "", "word_freq") &&
+          !grepl("word.?freq", b$title %||% "", ignore.case = TRUE)
+      }, sec$blocks)
+    }
     parts <- c(parts, paste0("## ", sec$title), "")
     intro <- .export_section_intro_md(sid)
     if (nzchar(intro)) parts <- c(parts, intro, "")
@@ -2254,95 +2250,159 @@ build_data_mapping_markdown <- function() {
 }
 
 # -----------------------------------------------------------------------------
-# Filtered data ZIP (+ optional figures)
+# Export for AI ZIP (Report + Analyst; optional raw + Data Map)
 # -----------------------------------------------------------------------------
 
-.write_filtered_data_zip <- function(path, bundle) {
-  td <- tempfile("export_data_")
+.export_normalize_timestamp_col <- function(df) {
+  if (is.null(df) || !is.data.frame(df) || !nrow(df)) return(df)
+  if (!"timestamp" %in% names(df)) return(df)
+  raw <- df$timestamp
+  parsed <- if (exists("parse_master_timestamp_inclusive", mode = "function")) {
+    tryCatch(parse_master_timestamp_inclusive(raw), error = function(e) NULL)
+  } else {
+    NULL
+  }
+  if (!is.null(parsed) && inherits(parsed, "POSIXct")) {
+    df$timestamp <- format(parsed, "%Y-%m-%d %H:%M:%S", tz = "America/Los_Angeles", usetz = FALSE)
+  } else if (exists("flatten_master_timestamp_col", mode = "function")) {
+    df$timestamp <- flatten_master_timestamp_col(raw)
+  }
+  df
+}
+
+.export_master_with_flags <- function(pre_all, post_all) {
+  # 3 master CSVs: pre / post with is_big_* flags (typed pools derived, not separate files)
+  pre <- .export_drop_pii_cols(pre_all)
+  post <- .export_drop_pii_cols(post_all)
+  pre <- .export_normalize_timestamp_col(pre)
+  post <- .export_normalize_timestamp_col(post)
+  if (is.data.frame(pre) && nrow(pre) && !"is_big_pre" %in% names(pre)) pre$is_big_pre <- NA
+  if (is.data.frame(post) && nrow(post) && !"is_big_post" %in% names(post)) post$is_big_post <- NA
+  list(pre = pre, post = post)
+}
+
+.write_ai_export_zip <- function(path, bundle, include_raw_and_map = TRUE) {
+  td <- tempfile("export_ai_")
   dir.create(td)
   on.exit(unlink(td, recursive = TRUE), add = TRUE)
 
-  # Absolute zip path BEFORE setwd(td) — relative paths would resolve inside td.
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   zip_abs <- file.path(normalizePath(dirname(path), mustWork = TRUE), basename(path))
+  zip_entries <- character(0)
 
-  tables <- list(
-    filter_snapshot = {
-      snap <- bundle$snap
-      data.frame(
+  # Always: Report (partner) + Analyst (trimmed Results)
+  report_md <- tryCatch({
+    if (exists("build_partner_report_markdown", mode = "function")) {
+      build_partner_report_markdown(bundle)
+    } else {
+      "# Partner Report\n\nbuilder unavailable\n"
+    }
+  }, error = function(e) paste0("# Partner Report error\n\n", conditionMessage(e), "\n"))
+  writeLines(report_md, file.path(td, "report_for_ai.md"), useBytes = TRUE)
+  zip_entries <- c(zip_entries, "report_for_ai.md")
+
+  analyst_md <- tryCatch(build_report_markdown(bundle), error = function(e) {
+    paste0("# Analyst file error\n\n", conditionMessage(e), "\n")
+  })
+  writeLines(analyst_md, file.path(td, "analyst_for_ai.md"), useBytes = TRUE)
+  zip_entries <- c(zip_entries, "analyst_for_ai.md")
+
+  if (isTRUE(include_raw_and_map)) {
+    map_md <- tryCatch(build_data_mapping_markdown(), error = function(e) {
+      paste0("# Data Map error\n\n", conditionMessage(e), "\n")
+    })
+    writeLines(map_md, file.path(td, "data_map.md"), useBytes = TRUE)
+    zip_entries <- c(zip_entries, "data_map.md")
+
+    masters <- .export_master_with_flags(bundle$pre_all, bundle$post_all)
+    annual <- .export_normalize_timestamp_col(.export_drop_pii_cols(bundle$annual %||% data.frame()))
+
+    # Drop fake response_rate_* from session_summary if present
+    ss <- bundle$session_summary %||% data.frame()
+    if (is.data.frame(ss) && ncol(ss)) {
+      ss <- ss[, !grepl("^response_rate_", names(ss)), drop = FALSE]
+    }
+
+    snap <- bundle$snap
+    # Surface test exclusion counts when available
+    test_n <- NA_character_
+    if (is.data.frame(bundle$pre_all) && "is_test" %in% names(bundle$pre_all)) {
+      test_n <- as.character(sum(bundle$pre_all$is_test, na.rm = TRUE) +
+                               sum((bundle$post_all$is_test %||% FALSE), na.rm = TRUE))
+    }
+    snap$is_test_excluded_note <- paste0(
+      "Test/junk rows flagged is_test are excluded from filtered exports by default. ",
+      "raw_is_test_count_in_unfiltered_bundle=", test_n
+    )
+
+    tables <- list(
+      filter_snapshot = data.frame(
         key = names(snap),
         value = vapply(snap, function(v) {
           if (is.null(v)) return("")
           paste(as.character(v), collapse = "; ")
         }, character(1)),
         stringsAsFactors = FALSE
-      )
-    },
-    session_summary = bundle$session_summary,
-    pre_all = .export_drop_pii_cols(bundle$pre_all),
-    post_all = .export_drop_pii_cols(bundle$post_all),
-    big_pre = .export_drop_pii_cols(bundle$big_pre),
-    little_pre = .export_drop_pii_cols(bundle$little_pre),
-    little_post = .export_drop_pii_cols(bundle$little_post),
-    big_post = .export_drop_pii_cols(bundle$big_post),
-    annual = .export_drop_pii_cols(bundle$annual)
-  )
+      ),
+      session_summary = ss,
+      pre = masters$pre,
+      post = masters$post,
+      annual = annual,
+      column_inventory = data.frame()
+    )
 
-  zip_entries <- character(0)
-  for (nm in names(tables)) {
-    df <- tables[[nm]]
-    if (is.null(df)) df <- data.frame()
-    if (!is.data.frame(df)) df <- as.data.frame(df, stringsAsFactors = FALSE)
-    fn <- file.path(td, paste0(nm, ".csv"))
-    .export_write_csv(df, fn)
-    zip_entries <- c(zip_entries, paste0(nm, ".csv"))
-  }
-
-  # Column inventory so secondary AI need not guess which headers exist
-  inv_rows <- list()
-  for (nm in names(tables)) {
-    df <- tables[[nm]]
-    if (is.null(df) || !is.data.frame(df)) next
-    if (!ncol(df)) {
-      inv_rows[[length(inv_rows) + 1L]] <- data.frame(
-        file = paste0(nm, ".csv"), column = NA_character_, col_index = NA_integer_,
-        stringsAsFactors = FALSE
-      )
-    } else {
-      inv_rows[[length(inv_rows) + 1L]] <- data.frame(
-        file = paste0(nm, ".csv"),
-        column = names(df),
-        col_index = seq_along(names(df)),
-        stringsAsFactors = FALSE
-      )
+    inv_rows <- list()
+    for (nm in c("filter_snapshot", "session_summary", "pre", "post", "annual")) {
+      df <- tables[[nm]]
+      if (is.null(df)) df <- data.frame()
+      if (!is.data.frame(df)) df <- as.data.frame(df, stringsAsFactors = FALSE)
+      fn <- file.path(td, paste0(nm, ".csv"))
+      .export_write_csv(df, fn)
+      zip_entries <- c(zip_entries, paste0(nm, ".csv"))
+      if (ncol(df)) {
+        inv_rows[[length(inv_rows) + 1L]] <- data.frame(
+          file = paste0(nm, ".csv"),
+          column = names(df),
+          col_index = seq_along(names(df)),
+          stringsAsFactors = FALSE
+        )
+      }
     }
-  }
-  inv <- if (length(inv_rows)) do.call(rbind, inv_rows) else data.frame()
-  inv_fn <- file.path(td, "column_inventory.csv")
-  .export_write_csv(inv, inv_fn)
-  zip_entries <- c(zip_entries, "column_inventory.csv")
-
-  # Also drop a copy of the Results MD for convenience
-  report_md <- tryCatch(build_report_markdown(bundle), error = function(e) "")
-  if (nzchar(report_md)) {
-    writeLines(report_md, file.path(td, "report_for_ai.md"), useBytes = TRUE)
-    zip_entries <- c(zip_entries, "report_for_ai.md")
+    inv <- if (length(inv_rows)) do.call(rbind, inv_rows) else data.frame()
+    .export_write_csv(inv, file.path(td, "column_inventory.csv"))
+    zip_entries <- c(zip_entries, "column_inventory.csv")
   }
 
   readme <- paste0(
-    "5 Buckets filtered data export\n",
+    "5 Buckets Export for AI\n",
     "Generated: ", bundle$snap$exported_at %||% "", "\n\n",
-    "PII columns (names, emails) were stripped. respondent_id (hash) is retained.\n",
-    "Use with Data Map (md for AI) for column meaning and scoring rules.\n",
-    "This ZIP is CSVs only (no figure PNGs). Results MD carries figure recipes.\n"
+    "Always included:\n",
+    "  report_for_ai.md  — pre-computed partner Report (agree%, delivery, quotes)\n",
+    "  analyst_for_ai.md — deeper Analyst / Results tables\n\n",
+    if (isTRUE(include_raw_and_map)) {
+      paste0(
+        "Also included (checkbox on):\n",
+        "  data_map.md — schema / scoring\n",
+        "  pre.csv, post.csv, annual.csv — filtered raw (PII stripped; is_big_* flags)\n",
+        "  filter_snapshot.csv, session_summary.csv, column_inventory.csv\n\n"
+      )
+    } else {
+      "Raw CSVs and Data Map were omitted (checkbox off).\n\n"
+    },
+    "No figure PNGs. Human PDF 2-pager is deferred.\n"
   )
   writeLines(readme, file.path(td, "README.txt"))
   zip_entries <- c(zip_entries, "README.txt")
 
   old <- setwd(td)
   on.exit(setwd(old), add = TRUE)
-  utils::zip(zipfile = zip_abs, files = zip_entries, flags = "-q")
+  utils::zip(zipfile = zip_abs, files = unique(zip_entries), flags = "-q")
   invisible(zip_abs)
+}
+
+# Back-compat alias used by scripts/generate_export_zip.R
+.write_filtered_data_zip <- function(path, bundle) {
+  .write_ai_export_zip(path, bundle, include_raw_and_map = TRUE)
 }
 
 # -----------------------------------------------------------------------------
@@ -2365,7 +2425,6 @@ register_export_server <- function(input, output, session,
   }
 
   .write_md_safe <- function(file, text) {
-    # Avoid useBytes=TRUE (can break UTF-8 downloads); always produce a file.
     text <- as.character(text %||% "")
     if (!length(text) || !nzchar(paste(text, collapse = ""))) {
       text <- "# Export failed\n\nNo content was generated.\n"
@@ -2376,64 +2435,18 @@ register_export_server <- function(input, output, session,
     invisible(file)
   }
 
-  output$export_human_pdf <- downloadHandler(
+  output$export_ai_zip <- downloadHandler(
     filename = function() {
       b <- tryCatch(.bundle(), error = function(e) list(slug = format(Sys.Date())))
-      paste0("5buckets_report_", b$slug %||% Sys.Date(), ".pdf")
+      paste0("5buckets_ai_export_", b$slug %||% Sys.Date(), ".zip")
     },
     content = function(file) {
       tryCatch({
-        .write_human_pdf(file, .bundle())
-      }, error = function(e) {
-        .write_text_pdf(file, "5 Buckets Impact Report",
-                        c("PDF export failed:", conditionMessage(e)))
-      })
-    }
-  )
-
-  output$export_analysis_md <- downloadHandler(
-    filename = function() {
-      b <- tryCatch(.bundle(), error = function(e) list(slug = format(Sys.Date())))
-      paste0("5buckets_results_", b$slug %||% Sys.Date(), ".md")
-    },
-    content = function(file) {
-      md <- tryCatch({
-        build_report_markdown(.bundle())
-      }, error = function(e) {
-        paste0(
-          "# 5 Buckets Results (for AI) — export error\n\n",
-          "Could not build the full Results markdown.\n\n",
-          "```\n", conditionMessage(e), "\n```\n"
+        .write_ai_export_zip(
+          file,
+          .bundle(),
+          include_raw_and_map = .export_include_raw_and_map(input)
         )
-      })
-      .write_md_safe(file, md)
-    },
-    contentType = "text/markdown; charset=UTF-8"
-  )
-
-  output$export_data_map_md <- downloadHandler(
-    filename = function() {
-      paste0("5buckets_data_map_", format(Sys.Date(), "%Y-%m-%d"), ".md")
-    },
-    content = function(file) {
-      md <- tryCatch({
-        build_data_mapping_markdown()
-      }, error = function(e) {
-        paste0("# Data Map export error\n\n```\n", conditionMessage(e), "\n```\n")
-      })
-      .write_md_safe(file, md)
-    },
-    contentType = "text/markdown; charset=UTF-8"
-  )
-
-  output$export_filtered_data_zip <- downloadHandler(
-    filename = function() {
-      b <- tryCatch(.bundle(), error = function(e) list(slug = format(Sys.Date())))
-      paste0("5buckets_data_", b$slug %||% Sys.Date(), ".zip")
-    },
-    content = function(file) {
-      tryCatch({
-        .write_filtered_data_zip(file, .bundle())
       }, error = function(e) {
         td <- tempfile("export_fail_")
         dir.create(td)

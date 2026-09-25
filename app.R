@@ -3120,6 +3120,10 @@ server <- function(input, output, session) {
     try(session$sendCustomMessage("dashBootDone", list()), silent = TRUE)
   }
 
+  # Holds repaired PM used for typing (session_id typos remapped).
+  program_manager_typing_val <- reactiveVal(NULL)
+  qa_repair_summary_val <- reactiveVal(NULL)
+
   load_all_data <- function() {
     # Keep overlay up until every sheet finishes (Pre/Post/Annual/PM/Mercy).
     app_ui_ready(FALSE)
@@ -3151,6 +3155,50 @@ server <- function(input, output, session) {
       warning("load_mercy_program_manager: ", conditionMessage(e))
       data.frame()
     })
+
+    # PM registry repair + is_test flag (in-memory; email on irreparable)
+    pm_combined <- tryCatch(
+      combine_program_managers_for_typing(pm, pm_mercy),
+      error = function(e) data.frame()
+    )
+    repaired <- tryCatch(
+      repair_masters_with_pm(pre, post, pm_combined, alert = TRUE),
+      error = function(e) {
+        warning("repair_masters_with_pm: ", conditionMessage(e))
+        NULL
+      }
+    )
+    if (!is.null(repaired)) {
+      pre <- repaired$pre %||% pre
+      post <- repaired$post %||% post
+      if (!is.null(repaired$pm_for_typing) && nrow(repaired$pm_for_typing)) {
+        program_manager_typing_val(repaired$pm_for_typing)
+      } else {
+        program_manager_typing_val(pm_combined)
+      }
+      qa_repair_summary_val(list(
+        repaired_n = repaired$repaired_n,
+        test_n = repaired$test_n,
+        irreparable_n = nrow(repaired$irreparable %||% data.frame()),
+        alert = repaired$alert
+      ))
+      if (!is.null(repaired$alert) && isTRUE(repaired$alert$sent == FALSE) &&
+          !is.null(repaired$alert$path) && nrow(repaired$irreparable %||% data.frame()) > 0) {
+        try(shiny::showNotification(
+          paste0(
+            "QA: ", nrow(repaired$irreparable),
+            " irreparable session_id(s). Report: ", basename(repaired$alert$path)
+          ),
+          type = "warning",
+          duration = 12
+        ), silent = TRUE)
+      }
+    } else {
+      pre <- flag_is_test_rows(pre)
+      post <- flag_is_test_rows(post)
+      program_manager_typing_val(pm_combined)
+    }
+
     master_pre_val(pre)
     master_post_val(post)
     program_manager_val(pm)
@@ -3225,7 +3273,10 @@ server <- function(input, output, session) {
   program_manager <- reactive(program_manager_val())
   mercy_program_manager <- reactive(mercy_program_manager_val())
   # Full company + Mercy PM for Big/Little Pre/Post typing (not org-filtered).
+  # Prefer in-memory repaired/normalized ids from load_all_data when available.
   program_manager_for_typing <- reactive({
+    repaired <- tryCatch(program_manager_typing_val(), error = function(e) NULL)
+    if (is.data.frame(repaired) && nrow(repaired) > 0) return(repaired)
     combine_program_managers_for_typing(program_manager(), mercy_program_manager())
   })
   observeEvent(plotly::event_data("plotly_relayout", source = "zipmap_pre"), {
@@ -3574,6 +3625,11 @@ server <- function(input, output, session) {
   filtered_pre <- reactive({
     data <- master_pre()
     if (nrow(data) == 0) return(data)
+    # Default-exclude test / junk rows flagged at load
+    if (exists("exclude_test_rows", mode = "function")) {
+      data <- exclude_test_rows(data, default_exclude = TRUE)
+    }
+    if (nrow(data) == 0) return(data)
     ss <- session_summary_data()
     if (nrow(ss) > 0 && "session_id" %in% colnames(ss) && "session_id" %in% colnames(data)) {
       data_sid <- trimws(as.character(data$session_id))
@@ -3632,6 +3688,10 @@ server <- function(input, output, session) {
   # Normalized session_id matching; if no post rows would match, skip session_id filter so Post data still loads
   filtered_post <- reactive({
     data <- master_post()
+    if (nrow(data) == 0) return(data)
+    if (exists("exclude_test_rows", mode = "function")) {
+      data <- exclude_test_rows(data, default_exclude = TRUE)
+    }
     if (nrow(data) == 0) return(data)
     ss <- session_summary_data()
     if (nrow(ss) > 0 && "session_id" %in% colnames(ss) && "session_id" %in% colnames(data)) {

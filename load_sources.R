@@ -3,6 +3,9 @@
 
 source("global.R")
 source("data/process_data.R")
+source("data/session_qa.R")
+source("data/export_canonicalize.R")
+source("data/partner_report.R")
 source("data/big_pre_analysis.R")
 source("data/big_post_analysis.R")
 # Feb 2026 analysis function names (internal *_feb2026); aliased in app.R

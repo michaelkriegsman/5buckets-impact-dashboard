@@ -117,10 +117,15 @@ series_display_label_short <- function(org_i, group_i, sis_val, sid_ctr, sid_str
 # never encoded in session_id (it lives in the Master `language` column). Stripping the trailing
 # suffix yields a stable base key that treats those language variants as ONE real session.
 base_session_id <- function(sid) {
+  # Prefer stable key (org+group+time+series) when session_qa is loaded —
+  # collapses language variants even when the date prefix was corrupted (e.g. 1969).
+  if (exists("stable_session_key", mode = "function")) {
+    return(stable_session_key(sid))
+  }
   s <- trimws(as.character(sid))
   has <- !is.na(s) & nzchar(s)
-  # Anchor on the first date-like token so embedded URLs still collapse correctly.
-  dm <- regexpr("20[0-9]{2}-[0-9]{2}-[0-9]{2}", s)
+  # Anchor on 19xx/20xx date so embedded URLs and epoch-corrupt ids still collapse.
+  dm <- regexpr("[12][0-9]{3}-[0-9]{2}-[0-9]{2}", s)
   seg <- ifelse(dm > 0, substr(s, dm, nchar(s)), s)
   parts <- strsplit(seg, "_", fixed = TRUE)
   vapply(seq_along(s), function(i) {
@@ -288,8 +293,8 @@ create_session_summary_from_master <- function(pre_data, post_data, program_mana
       ),
       start_time = if ("session_start_time" %in% colnames(.)) as.character(session_start_time) else NA_character_,
       end_time = NA_character_,
-      response_rate_pre = ifelse(pre_responses > 0, round(100 * pre_responses / max(pre_responses, 1), 1), 0),
-      response_rate_post = ifelse(post_responses > 0, round(100 * post_responses / max(post_responses, 1), 1), 0),
+      # Do not invent response rates from counts alone (former ÷ max was not attendance-based).
+      # Real rates require attendees_present from Program Manager — omitted until that field exists.
       time_range = ifelse(!is.na(start_time) & start_time != "", as.character(start_time), "")
     )
   if (!"date" %in% colnames(session_summary)) session_summary$date <- NA

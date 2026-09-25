@@ -29,3 +29,7 @@ Thumbs.db
 *.tmp
 ~$*
 .secrets
+# Local export previews / scratch
+tmp_exports/
+Rplots.pdf
+*.Rcheck/
