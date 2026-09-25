@@ -6,9 +6,10 @@
 > Set up on **2026-06-15**. It supersedes the older copy that lived in Google Drive at
 > `…/5 Buckets/Impact Suite/Impact Dashboard/` (that copy is now deprecated for editing).
 >
-> - **Git remote:** `github.com/5buckets/5buckets-impact-dashboard` (client's GitHub, public repo)
-> - **Live host:** Posit Connect Cloud (client's free account) — auto-redeploys on every `git push`
-> - **Edit loop:** edit here → `git add -A && git commit -m "…" && git push` → Connect Cloud rebuilds → live URL updates
+> - **Git remote:** `github.com/michaelkriegsman/5buckets-impact-dashboard` (personal GitHub; source of truth)
+> - **Legacy org copy:** `github.com/5buckets/5buckets-impact-dashboard` — superseded; do not push here
+> - **Live host:** Posit Connect Cloud — redeploys when this personal repo’s `main` is linked and pushed
+> - **Edit loop:** edit here → commit → `git push origin main` → Connect Cloud rebuilds → live URL updates
 >
 > **Hosting / auth notes**
 > - Auth to Google Sheets uses a **service account**; the JSON key is set on Connect Cloud as the
@@ -80,8 +81,8 @@ Rscript run_app.R
 
 Deployment is **git-based** — no `rsconnect::deployApp()` needed:
 
-1. Push to `github.com/5buckets/5buckets-impact-dashboard` (`main` branch).
-2. On [connect.posit.cloud](https://connect.posit.cloud) the app is linked to this repo; it rebuilds
+1. Push to `github.com/michaelkriegsman/5buckets-impact-dashboard` (`main` branch).
+2. On [connect.posit.cloud](https://connect.posit.cloud) the app must be linked to **this personal repo**; it rebuilds
    automatically from `manifest.json` (primary file `app.R`).
 3. Secret/env variables are set in the Connect Cloud deployment settings (not in code):
    - `GOOGLE_SERVICE_ACCOUNT_KEY` — full service-account JSON, one line
